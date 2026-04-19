@@ -16,6 +16,8 @@ CATEGORY = {
     "login": "auth", "login_failed": "auth", "logout": "auth",
     "activate": "grant", "extend": "grant", "deactivate": "grant",
     "grant_expired": "grant", "wg_config_generated": "grant",
+    "user_revoked": "admin", "admin_deactivate": "admin",
+    "service_blocked": "admin", "service_unblocked": "admin",
 }
 
 

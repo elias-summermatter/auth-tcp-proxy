@@ -29,6 +29,7 @@ def create_app(config: dict) -> Flask:
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
     users = config.get("users", {})
+    admins = set(config.get("admins", []))
     audit = AuditLog(config.get("audit_log_path"))
     rotation = config.get("audit_rotation", "weekly")
     if rotation in ("weekly", "daily"):
@@ -46,6 +47,19 @@ def create_app(config: dict) -> Flask:
                 if request.path.startswith("/api/"):
                     return jsonify({"error": "unauthorized"}), 401
                 return redirect(url_for("login", next=request.path))
+            return f(*a, **kw)
+        return wrapper
+
+    def admin_required(f):
+        @wraps(f)
+        def wrapper(*a, **kw):
+            u = session.get("user")
+            if not u:
+                if request.path.startswith("/api/"):
+                    return jsonify({"error": "unauthorized"}), 401
+                return redirect(url_for("login", next=request.path))
+            if u not in admins:
+                return jsonify({"error": "admin required"}), 403
             return f(*a, **kw)
         return wrapper
 
@@ -82,17 +96,20 @@ def create_app(config: dict) -> Flask:
             has_config=gateway.user_has_config(u),
             services=list(gateway.services.values()),
             endpoint=gateway.endpoint,
+            is_admin=(u in admins),
         )
 
     @app.route("/api/status")
     @login_required
     def api_status():
         u = session["user"]
+        user_state = gateway.users.get(u, {})
         return jsonify({
             "user": u,
             "wg_ip": gateway.user_ip(u),
             "has_config": gateway.user_has_config(u),
             "grants": gateway.status_for_user(u),
+            "blocked": list(user_state.get("blocked_services", [])),
         })
 
     @app.route("/wg-config", methods=["POST"])
@@ -123,6 +140,8 @@ def create_app(config: dict) -> Flask:
             return jsonify({"error": "generate a WireGuard config first"}), 400
         try:
             exp = gateway.activate(u, name, source_ip=src)
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
         except Exception as e:
             return jsonify({"error": str(e)}), 400
         audit.record("activate", user=u, ip=src, service=name,
@@ -140,6 +159,8 @@ def create_app(config: dict) -> Flask:
             return jsonify({"error": "generate a WireGuard config first"}), 400
         try:
             exp = gateway.extend(u, name, source_ip=src)
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
         except Exception as e:
             return jsonify({"error": str(e)}), 400
         audit.record("extend", user=u, ip=src, service=name,
@@ -157,8 +178,63 @@ def create_app(config: dict) -> Flask:
                      service=name, wg_ip=gateway.user_ip(u))
         return jsonify({"service": name})
 
+    @app.route("/api/users")
+    @admin_required
+    def api_users():
+        return jsonify({"users": gateway.list_users()})
+
+    @app.route("/api/revoke/<username>", methods=["POST"])
+    @admin_required
+    def api_revoke(username: str):
+        actor = session["user"]
+        if username == actor:
+            return jsonify({"error": "cannot revoke your own config; re-download to rotate instead"}), 400
+        ok = gateway.revoke_user(username)
+        if not ok:
+            return jsonify({"error": "user has no active config"}), 404
+        audit.record("user_revoked", user=actor, ip=request.remote_addr,
+                     target_user=username)
+        return jsonify({"ok": True, "revoked": username})
+
+    @app.route("/api/admin/deactivate/<username>/<name>", methods=["POST"])
+    @admin_required
+    def api_admin_deactivate(username: str, name: str):
+        actor = session["user"]
+        if name not in gateway.services:
+            return jsonify({"error": "unknown service"}), 404
+        if not gateway.user_has_config(username):
+            return jsonify({"error": "unknown user"}), 404
+        gateway.deactivate(username, name)
+        audit.record("admin_deactivate", user=actor, ip=request.remote_addr,
+                     target_user=username, service=name)
+        return jsonify({"ok": True})
+
+    @app.route("/api/admin/block/<username>/<name>", methods=["POST"])
+    @admin_required
+    def api_admin_block(username: str, name: str):
+        actor = session["user"]
+        if name not in gateway.services:
+            return jsonify({"error": "unknown service"}), 404
+        ok = gateway.block_service(username, name)
+        if not ok:
+            return jsonify({"error": "unknown user"}), 404
+        audit.record("service_blocked", user=actor, ip=request.remote_addr,
+                     target_user=username, service=name)
+        return jsonify({"ok": True})
+
+    @app.route("/api/admin/unblock/<username>/<name>", methods=["POST"])
+    @admin_required
+    def api_admin_unblock(username: str, name: str):
+        actor = session["user"]
+        ok = gateway.unblock_service(username, name)
+        if not ok:
+            return jsonify({"error": "unknown user"}), 404
+        audit.record("service_unblocked", user=actor, ip=request.remote_addr,
+                     target_user=username, service=name)
+        return jsonify({"ok": True})
+
     @app.route("/api/audit")
-    @login_required
+    @admin_required
     def api_audit():
         try:
             offset = max(0, int(request.args.get("offset", 0)))

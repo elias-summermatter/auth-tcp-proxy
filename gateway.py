@@ -301,6 +301,82 @@ class Gateway:
     def user_has_config(self, username: str) -> bool:
         return username in self.users
 
+    def list_users(self) -> list[dict]:
+        now = time.time()
+        with self._lock:
+            out = []
+            for username, u in self.users.items():
+                active = [
+                    {"service": svc_name, "expires_at": g.expires_at}
+                    for (uname, svc_name), g in self.grants.items()
+                    if uname == username and g.expires_at > now
+                ]
+                out.append({
+                    "username": username,
+                    "wg_ip": u.get("ip"),
+                    "created_at": u.get("created_at"),
+                    "active": active,
+                    "blocked": list(u.get("blocked_services", [])),
+                })
+            return out
+
+    def is_blocked(self, username: str, service_name: str) -> bool:
+        u = self.users.get(username)
+        if not u:
+            return False
+        return service_name in u.get("blocked_services", [])
+
+    def block_service(self, username: str, service_name: str) -> bool:
+        """Permanently block a service for a user + revoke any active grant.
+        Returns True if the block was applied (even if already blocked)."""
+        with self._lock:
+            u = self.users.get(username)
+            if not u:
+                return False
+            blocked = set(u.get("blocked_services", []))
+            blocked.add(service_name)
+            u["blocked_services"] = sorted(blocked)
+            self._save_users()
+            g = self.grants.pop((username, service_name), None)
+            if g is not None:
+                self._apply_rules(g.rules, delete=True)
+                svc = self.services.get(service_name)
+                if svc is not None:
+                    self._drop_conntrack(g.user_ip, svc)
+        return True
+
+    def unblock_service(self, username: str, service_name: str) -> bool:
+        with self._lock:
+            u = self.users.get(username)
+            if not u:
+                return False
+            blocked = set(u.get("blocked_services", []))
+            blocked.discard(service_name)
+            u["blocked_services"] = sorted(blocked)
+            self._save_users()
+        return True
+
+    def revoke_user(self, username: str) -> bool:
+        """Kill all grants + drop the WG peer + forget the user's assignment.
+        Returns True if the user had a config; False otherwise."""
+        with self._lock:
+            u = self.users.pop(username, None)
+            if u is None:
+                return False
+            for key in [k for k in self.grants if k[0] == username]:
+                g = self.grants.pop(key)
+                self._apply_rules(g.rules, delete=True)
+                svc = self.services.get(key[1])
+                if svc is not None:
+                    self._drop_conntrack(g.user_ip, svc)
+            try:
+                self._wg_remove_peer(u["public_key"])
+            except Exception as e:
+                log.warning("wg peer remove failed for %s: %s", username, e)
+            self._save_users()
+        log.info("revoked user=%s ip=%s", username, u.get("ip"))
+        return True
+
     # --- service resolution ----------------------------------------------
 
     def _resolve_service(self, svc: Service) -> list[str]:
@@ -386,6 +462,8 @@ class Gateway:
         u = self.users.get(user)
         if u is None:
             raise RuntimeError("user has no WG config; generate one first")
+        if service_name in u.get("blocked_services", []):
+            raise PermissionError(f"service {service_name!r} is blocked for this user")
         user_ip = u["ip"]
         now = time.time()
         expires = now + DEFAULT_DURATION
@@ -407,6 +485,8 @@ class Gateway:
         u = self.users.get(user)
         if u is None:
             raise RuntimeError("user has no WG config; generate one first")
+        if service_name in u.get("blocked_services", []):
+            raise PermissionError(f"service {service_name!r} is blocked for this user")
         svc = self.services.get(service_name)
         if svc is None:
             raise KeyError(service_name)

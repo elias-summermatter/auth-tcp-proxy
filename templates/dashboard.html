@@ -55,14 +55,26 @@
     .filters .clear { background: transparent; color: #a6adc8; border: 1px solid #45475a; padding: 0.4rem 0.75rem; border-radius: 5px; cursor: pointer; font-size: 0.85rem; }
     .filters .clear:hover { background: #313244; color: #cdd6f4; }
     .filters .count { color: #6c7086; font-size: 0.8rem; margin-left: auto; }
+    .badge-admin { background: #cba6f7; color: #1e1e2e; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; margin-left: 0.25rem; }
+    .self-row { opacity: 0.6; }
+    .users-table .ip { font-size: 0.85rem; }
+    .users-table .active-svcs { color: #a6e3a1; font-family: ui-monospace, monospace; font-size: 0.85rem; }
+    .users-table .no-active { color: #6c7086; font-size: 0.85rem; }
+    .chip { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.2rem 0.5rem; border-radius: 12px; font-size: 0.8rem; margin: 0.15rem 0.2rem 0.15rem 0; font-family: ui-monospace, monospace; }
+    .chip-active { background: rgba(166, 227, 161, 0.15); color: #a6e3a1; }
+    .chip-blocked { background: rgba(243, 139, 168, 0.15); color: #f38ba8; }
+    .chip button { background: transparent; color: inherit; border: 0; padding: 0 0.2rem; margin: 0; font-size: 0.9rem; line-height: 1; cursor: pointer; opacity: 0.7; }
+    .chip button:hover { opacity: 1; }
+    .block-picker { background: #1e1e2e; color: #cdd6f4; border: 1px solid #45475a; border-radius: 4px; padding: 0.25rem 0.4rem; font-size: 0.8rem; margin-top: 0.15rem; }
+    .no-entry { color: #6c7086; font-size: 0.8rem; font-style: italic; }
   </style>
 </head>
-<body data-has-config="{{ 'true' if has_config else 'false' }}">
+<body data-has-config="{{ 'true' if has_config else 'false' }}" data-is-admin="{{ 'true' if is_admin else 'false' }}">
   <header>
     <div>
       <h1>Secure Infrastructure Gateway</h1>
       <div class="meta">
-        Signed in as <strong>{{ user }}</strong>
+        Signed in as <strong>{{ user }}</strong>{% if is_admin %} <span class="badge-admin">admin</span>{% endif %}
         {% if wg_ip %} · WG IP <span class="ip">{{ wg_ip }}</span>{% endif %}
         · Endpoint <span class="ip">{{ endpoint }}</span>
       </div>
@@ -123,6 +135,25 @@
     if all your grants expire, your tunnel exists but cannot reach any service.
   </div>
 
+  {% if is_admin %}
+
+  <h2>Users</h2>
+  <table class="users-table">
+    <thead>
+      <tr>
+        <th>Username</th>
+        <th>WG IP</th>
+        <th>Active grants</th>
+        <th>Blocked services</th>
+        <th>Registered</th>
+        <th style="text-align:right">Actions</th>
+      </tr>
+    </thead>
+    <tbody id="users-rows">
+      <tr><td colspan="6" style="color:#6c7086;text-align:center;padding:1rem">loading…</td></tr>
+    </tbody>
+  </table>
+
   <h2>Audit log</h2>
   <div class="filters">
     <select id="f-category">
@@ -159,10 +190,15 @@
     </table>
   </div>
 
+  {% endif %}
+
 <script>
 const MAX_SECONDS = 8 * 3600;
 let grants = {};
+let blockedForMe = new Set();
 let hasConfig = document.body.dataset.hasConfig === 'true';
+const isAdmin = document.body.dataset.isAdmin === 'true';
+const currentUser = {{ user | tojson }};
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -183,6 +219,7 @@ async function refresh() {
     const data = await r.json();
     grants = data.grants || {};
     hasConfig = !!data.has_config;
+    blockedForMe = new Set(data.blocked || []);
   } catch (e) { /* network hiccup, keep last state */ }
   render();
 }
@@ -202,6 +239,9 @@ function render() {
         <button class="btn-primary" ${atMax ? 'disabled title="at 8h cap"' : ''} data-action="extend" data-name="${name}">Extend +1h</button>
         <button class="btn-danger" data-action="deactivate" data-name="${name}">Deactivate</button>
       `;
+    } else if (blockedForMe.has(name)) {
+      statusCell.innerHTML = `<span class="status-inactive" style="color:#f38ba8">blocked by admin</span>`;
+      actionsCell.innerHTML = `<button class="btn-primary" disabled title="An administrator has blocked this service for you">Activate</button>`;
     } else {
       statusCell.innerHTML = `<span class="status-inactive">inactive</span>`;
       const label = hasConfig ? 'Activate' : 'Generate config first';
@@ -223,6 +263,125 @@ document.getElementById('rows').addEventListener('click', async (ev) => {
   } finally {
     await refresh();
   }
+});
+
+// --- users panel (admin only) ------------------------------------------
+
+let usersList = [];
+const ALL_SERVICES = [{% for svc in services %}{{ svc.name | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}];
+
+async function refreshUsers() {
+  if (!isAdmin) return;
+  try {
+    const r = await fetch('/api/users', { credentials: 'same-origin' });
+    if (r.status === 401) { window.location = '/login'; return; }
+    if (r.status === 403) return;
+    const data = await r.json();
+    usersList = data.users || [];
+    renderUsers();
+  } catch (e) { /* ignore */ }
+}
+
+function renderUsers() {
+  const tbody = document.getElementById('users-rows');
+  if (!tbody) return;
+  if (!usersList.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="color:#6c7086;text-align:center;padding:1rem">no users have a WG config yet</td></tr>';
+    return;
+  }
+  const now = Date.now() / 1000;
+  tbody.innerHTML = usersList.map(u => {
+    const uname = escapeHtml(u.username);
+    const isSelf = u.username === currentUser;
+
+    const activeChips = (u.active || [])
+      .filter(a => a.expires_at > now)
+      .map(a => {
+        const remaining = a.expires_at - now;
+        return `<span class="chip chip-active">${escapeHtml(a.service)} ${fmt(remaining)}`
+          + `<button title="Revoke this grant" data-kick="${uname}" data-service="${escapeHtml(a.service)}">×</button></span>`;
+      }).join('');
+    const activeCell = activeChips || '<span class="no-entry">none</span>';
+
+    const blockedSet = new Set(u.blocked || []);
+    const blockedChips = (u.blocked || [])
+      .map(svc => `<span class="chip chip-blocked">${escapeHtml(svc)}`
+        + `<button title="Unblock" data-unblock="${uname}" data-service="${escapeHtml(svc)}">×</button></span>`)
+      .join('');
+    const blockable = ALL_SERVICES.filter(s => !blockedSet.has(s));
+    const picker = blockable.length
+      ? `<select class="block-picker" data-user="${uname}">
+           <option value="">+ block service…</option>
+           ${blockable.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')}
+         </select>`
+      : '';
+    const blockedCell = `${blockedChips || '<span class="no-entry">none</span>'}<div>${picker}</div>`;
+
+    const created = u.created_at ? new Date(u.created_at * 1000).toLocaleString() : '—';
+    const actions = isSelf
+      ? '<span style="color:#6c7086;font-size:0.85rem">you</span>'
+      : `<button class="btn-danger" data-revoke="${uname}">Revoke config</button>`;
+
+    return `<tr class="${isSelf ? 'self-row' : ''}">
+      <td><strong>${uname}</strong></td>
+      <td class="ip">${escapeHtml(u.wg_ip || '—')}</td>
+      <td>${activeCell}</td>
+      <td>${blockedCell}</td>
+      <td style="color:#a6adc8;font-size:0.85rem">${escapeHtml(created)}</td>
+      <td style="text-align:right">${actions}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function postAdmin(path, {confirmMsg} = {}) {
+  if (confirmMsg && !confirm(confirmMsg)) return false;
+  const r = await fetch(path, { method: 'POST', credentials: 'same-origin' });
+  if (r.status === 401) { window.location = '/login'; return false; }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) alert(data.error || 'request failed');
+  return r.ok;
+}
+
+document.addEventListener('click', async (ev) => {
+  const revoke = ev.target.closest('button[data-revoke]');
+  if (revoke) {
+    revoke.disabled = true;
+    try {
+      await postAdmin(`/api/revoke/${encodeURIComponent(revoke.dataset.revoke)}`, {
+        confirmMsg: `Revoke ${revoke.dataset.revoke}'s WG config? Tunnel stops immediately and all grants are dropped.`,
+      });
+    } finally { refreshUsers(); refreshAudit(true); }
+    return;
+  }
+  const kick = ev.target.closest('button[data-kick]');
+  if (kick) {
+    kick.disabled = true;
+    try {
+      await postAdmin(`/api/admin/deactivate/${encodeURIComponent(kick.dataset.kick)}/${encodeURIComponent(kick.dataset.service)}`);
+    } finally { refreshUsers(); refreshAudit(true); }
+    return;
+  }
+  const unblock = ev.target.closest('button[data-unblock]');
+  if (unblock) {
+    unblock.disabled = true;
+    try {
+      await postAdmin(`/api/admin/unblock/${encodeURIComponent(unblock.dataset.unblock)}/${encodeURIComponent(unblock.dataset.service)}`);
+    } finally { refreshUsers(); refreshAudit(true); }
+    return;
+  }
+});
+
+document.addEventListener('change', async (ev) => {
+  const picker = ev.target.closest('select.block-picker');
+  if (!picker || !picker.value) return;
+  const user = picker.dataset.user;
+  const svc = picker.value;
+  picker.value = '';
+  await postAdmin(`/api/admin/block/${encodeURIComponent(user)}/${encodeURIComponent(svc)}`, {
+    confirmMsg: `Permanently block ${svc} for ${user}? Any active grant for this service will also be revoked.`,
+  });
+  refreshUsers();
+  refreshAudit(true);
 });
 
 // --- audit panel --------------------------------------------------------
@@ -251,6 +410,7 @@ function currentFilters() {
 }
 
 async function refreshAudit(resetPage = false) {
+  if (!isAdmin) return;
   if (resetPage) auditOffset = 0;
   const f = currentFilters();
   const params = new URLSearchParams({ offset: auditOffset, limit: PAGE_SIZE });
@@ -288,31 +448,40 @@ function renderAudit(events) {
   }).join('');
 }
 
-['f-category', 'f-service', 'f-user', 'f-ip'].forEach(id => {
-  const el = document.getElementById(id);
-  el.addEventListener('input', () => refreshAudit(true));
-  el.addEventListener('change', () => refreshAudit(true));
-});
-document.getElementById('f-clear').addEventListener('click', () => {
+if (isAdmin) {
   ['f-category', 'f-service', 'f-user', 'f-ip'].forEach(id => {
-    document.getElementById(id).value = '';
+    const el = document.getElementById(id);
+    el.addEventListener('input', () => refreshAudit(true));
+    el.addEventListener('change', () => refreshAudit(true));
   });
-  refreshAudit(true);
-});
-document.getElementById('f-prev').addEventListener('click', () => {
-  auditOffset = Math.max(0, auditOffset - PAGE_SIZE);
-  refreshAudit(false);
-});
-document.getElementById('f-next').addEventListener('click', () => {
-  auditOffset = auditOffset + PAGE_SIZE;
-  refreshAudit(false);
-});
+  document.getElementById('f-clear').addEventListener('click', () => {
+    ['f-category', 'f-service', 'f-user', 'f-ip'].forEach(id => {
+      document.getElementById(id).value = '';
+    });
+    refreshAudit(true);
+  });
+  document.getElementById('f-prev').addEventListener('click', () => {
+    auditOffset = Math.max(0, auditOffset - PAGE_SIZE);
+    refreshAudit(false);
+  });
+  document.getElementById('f-next').addEventListener('click', () => {
+    auditOffset = auditOffset + PAGE_SIZE;
+    refreshAudit(false);
+  });
+}
 
 refresh();
-refreshAudit(true);
+if (isAdmin) {
+  refreshUsers();
+  refreshAudit(true);
+}
 setInterval(render, 1000);
 setInterval(refresh, 10000);
-setInterval(() => { if (auditOffset === 0) refreshAudit(false); }, 5000);
+if (isAdmin) {
+  setInterval(renderUsers, 1000);     // local countdown tick
+  setInterval(refreshUsers, 10000);   // pull server state
+  setInterval(() => { if (auditOffset === 0) refreshAudit(false); }, 5000);
+}
 </script>
 </body>
 </html>
