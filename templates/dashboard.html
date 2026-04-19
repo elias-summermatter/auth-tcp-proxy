@@ -298,7 +298,8 @@ function renderUsers() {
       .filter(a => a.expires_at > now)
       .map(a => {
         const remaining = a.expires_at - now;
-        return `<span class="chip chip-active">${escapeHtml(a.service)} ${fmt(remaining)}`
+        return `<span class="chip chip-active" data-expires-at="${a.expires_at}">`
+          + `${escapeHtml(a.service)} <span class="chip-countdown">${fmt(remaining)}</span>`
           + `<button title="Revoke this grant" data-kick="${uname}" data-service="${escapeHtml(a.service)}">×</button></span>`;
       }).join('');
     const activeCell = activeChips || '<span class="no-entry">none</span>';
@@ -318,9 +319,13 @@ function renderUsers() {
     const blockedCell = `${blockedChips || '<span class="no-entry">none</span>'}<div>${picker}</div>`;
 
     const created = u.created_at ? new Date(u.created_at * 1000).toLocaleString() : '—';
+    const fullyLocked = ALL_SERVICES.length > 0 && ALL_SERVICES.every(s => blockedSet.has(s));
+    const lockBtn = fullyLocked
+      ? `<button class="btn-secondary" data-unlock="${uname}" title="Allow access again">Unlock</button>`
+      : `<button class="btn-danger" data-lock="${uname}" title="Block every service for this user in one click">Lock out</button>`;
     const actions = isSelf
       ? '<span style="color:#6c7086;font-size:0.85rem">you</span>'
-      : `<button class="btn-danger" data-revoke="${uname}">Revoke config</button>`;
+      : `${lockBtn} <button class="btn-danger" data-revoke="${uname}">Revoke config</button>`;
 
     return `<tr class="${isSelf ? 'self-row' : ''}">
       <td><strong>${uname}</strong></td>
@@ -369,7 +374,36 @@ document.addEventListener('click', async (ev) => {
     } finally { refreshUsers(); refreshAudit(true); }
     return;
   }
+  const lock = ev.target.closest('button[data-lock]');
+  if (lock) {
+    lock.disabled = true;
+    try {
+      await postAdmin(`/api/admin/lock/${encodeURIComponent(lock.dataset.lock)}`, {
+        confirmMsg: `Lock ${lock.dataset.lock} out of every service? Active grants are revoked; tunnel stays up but cannot reach anything.`,
+      });
+    } finally { refreshUsers(); refreshAudit(true); }
+    return;
+  }
+  const unlock = ev.target.closest('button[data-unlock]');
+  if (unlock) {
+    unlock.disabled = true;
+    try {
+      await postAdmin(`/api/admin/unlock/${encodeURIComponent(unlock.dataset.unlock)}`);
+    } finally { refreshUsers(); refreshAudit(true); }
+    return;
+  }
 });
+
+function tickUsersCountdowns() {
+  const now = Date.now() / 1000;
+  document.querySelectorAll('#users-rows .chip-active').forEach(chip => {
+    const exp = parseFloat(chip.dataset.expiresAt || '0');
+    const remaining = exp - now;
+    const cd = chip.querySelector('.chip-countdown');
+    if (!cd) return;
+    cd.textContent = fmt(remaining);
+  });
+}
 
 document.addEventListener('change', async (ev) => {
   const picker = ev.target.closest('select.block-picker');
@@ -478,8 +512,11 @@ if (isAdmin) {
 setInterval(render, 1000);
 setInterval(refresh, 10000);
 if (isAdmin) {
-  setInterval(renderUsers, 1000);     // local countdown tick
-  setInterval(refreshUsers, 10000);   // pull server state
+  // Countdown tick updates only the number text inside existing chips, so
+  // native controls (like the block-service <select>) don't get destroyed
+  // out from under the admin while they're interacting with them.
+  setInterval(tickUsersCountdowns, 1000);
+  setInterval(refreshUsers, 10000);
   setInterval(() => { if (auditOffset === 0) refreshAudit(false); }, 5000);
 }
 </script>

@@ -356,6 +356,33 @@ class Gateway:
             self._save_users()
         return True
 
+    def lock_user(self, username: str) -> bool:
+        """Block every configured service for a user AND revoke all their
+        active grants. The WG peer stays (so the tunnel still handshakes)
+        but no FORWARD rule matches — effectively a full access freeze."""
+        with self._lock:
+            u = self.users.get(username)
+            if not u:
+                return False
+            u["blocked_services"] = sorted(self.services.keys())
+            self._save_users()
+            for key in [k for k in self.grants if k[0] == username]:
+                g = self.grants.pop(key)
+                self._apply_rules(g.rules, delete=True)
+                svc = self.services.get(key[1])
+                if svc is not None:
+                    self._drop_conntrack(g.user_ip, svc)
+        return True
+
+    def unlock_user(self, username: str) -> bool:
+        with self._lock:
+            u = self.users.get(username)
+            if not u:
+                return False
+            u["blocked_services"] = []
+            self._save_users()
+        return True
+
     def revoke_user(self, username: str) -> bool:
         """Kill all grants + drop the WG peer + forget the user's assignment.
         Returns True if the user had a config; False otherwise."""

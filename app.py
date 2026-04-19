@@ -233,6 +233,30 @@ def create_app(config: dict) -> Flask:
                      target_user=username, service=name)
         return jsonify({"ok": True})
 
+    @app.route("/api/admin/lock/<username>", methods=["POST"])
+    @admin_required
+    def api_admin_lock(username: str):
+        actor = session["user"]
+        if username == actor:
+            return jsonify({"error": "cannot lock yourself out"}), 400
+        ok = gateway.lock_user(username)
+        if not ok:
+            return jsonify({"error": "unknown user"}), 404
+        audit.record("user_locked", user=actor, ip=request.remote_addr,
+                     target_user=username)
+        return jsonify({"ok": True})
+
+    @app.route("/api/admin/unlock/<username>", methods=["POST"])
+    @admin_required
+    def api_admin_unlock(username: str):
+        actor = session["user"]
+        ok = gateway.unlock_user(username)
+        if not ok:
+            return jsonify({"error": "unknown user"}), 404
+        audit.record("user_unlocked", user=actor, ip=request.remote_addr,
+                     target_user=username)
+        return jsonify({"ok": True})
+
     @app.route("/api/audit")
     @admin_required
     def api_audit():
