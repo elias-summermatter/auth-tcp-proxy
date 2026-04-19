@@ -345,6 +345,23 @@ class Gateway:
             cmd = ["iptables", op, IPTABLES_CHAIN] + (["1"] if op == "-I" else []) + r
             _run(cmd, check=not delete, capture=delete)
 
+    def _drop_conntrack(self, user_ip: str, svc: Service) -> None:
+        """Tear down in-flight flows so expiry/deactivation cuts the SSH or
+        psql session the user already had open, not just new connections."""
+        if not self.enable_netfilter:
+            return
+        targets = svc.resolved or svc.cidrs
+        for dest in targets:
+            dest_ip = dest.split("/", 1)[0]
+            cmd = ["conntrack", "-D",
+                   "-s", user_ip,
+                   "-d", dest_ip,
+                   "-p", svc.protocol]
+            if svc.port:
+                cmd += ["--dport", str(svc.port)]
+            # conntrack -D exits 0 if entries were deleted, 1 if none matched.
+            _run(cmd, check=False, capture=True)
+
     def activate(self, user: str, service_name: str) -> float:
         svc = self.services.get(service_name)
         if svc is None:
@@ -404,6 +421,9 @@ class Gateway:
             g = self.grants.pop(key, None)
             if g is not None:
                 self._apply_rules(g.rules, delete=True)
+                svc = self.services.get(service_name)
+                if svc is not None:
+                    self._drop_conntrack(g.user_ip, svc)
 
     def status_for_user(self, user: str) -> dict[str, float]:
         now = time.time()
@@ -432,8 +452,11 @@ class Gateway:
                 if g.expires_at <= now:
                     expired.append((key, g))
                     del self.grants[key]
-            for _, g in expired:
+            for (_, service_name), g in expired:
                 self._apply_rules(g.rules, delete=True)
+                svc = self.services.get(service_name)
+                if svc is not None:
+                    self._drop_conntrack(g.user_ip, svc)
         for (user, service), g in expired:
             log.info("reaped grant user=%s service=%s", user, service)
             self.audit.record("grant_expired", user=user, service=service, ip=g.user_ip)

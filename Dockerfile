@@ -12,6 +12,7 @@ RUN apt-get update \
       wireguard-tools \
       iptables \
       iproute2 \
+      conntrack \
       ca-certificates \
       tini \
  && rm -rf /var/lib/apt/lists/*
