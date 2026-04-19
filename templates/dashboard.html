@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Dashboard — Auth TCP Proxy</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #1e1e2e; color: #cdd6f4; margin: 0; padding: 2rem; max-width: 1100px; margin: 0 auto; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; flex-wrap: wrap; gap: 1rem; }
+    h1 { margin: 0 0 0.25rem 0; font-size: 1.5rem; }
+    .meta { color: #a6adc8; font-size: 0.9rem; }
+    .ip { font-family: ui-monospace, monospace; background: #313244; padding: 0.2rem 0.5rem; border-radius: 4px; color: #cdd6f4; }
+    table { width: 100%; border-collapse: collapse; background: #313244; border-radius: 8px; overflow: hidden; }
+    th, td { text-align: left; padding: 0.85rem 1rem; border-bottom: 1px solid #45475a; vertical-align: middle; }
+    tr:last-child td { border-bottom: 0; }
+    th { color: #a6adc8; font-weight: 500; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; background: #292c3c; }
+    .target { color: #a6adc8; font-family: ui-monospace, monospace; font-size: 0.85rem; }
+    .status-inactive { color: #6c7086; }
+    .status-active { color: #a6e3a1; font-weight: 600; }
+    .countdown { font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+    button { padding: 0.45rem 0.9rem; margin-right: 0.25rem; border: 0; border-radius: 5px; cursor: pointer; font-weight: 500; font-size: 0.9rem; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: #89b4fa; color: #1e1e2e; }
+    .btn-primary:hover:not(:disabled) { background: #74c7ec; }
+    .btn-secondary { background: #45475a; color: #cdd6f4; }
+    .btn-secondary:hover:not(:disabled) { background: #585b70; }
+    .btn-danger { background: #f38ba8; color: #1e1e2e; }
+    .btn-danger:hover:not(:disabled) { background: #eba0ac; }
+    .logout { background: transparent; color: #a6adc8; border: 1px solid #45475a; padding: 0.5rem 1rem; }
+    .logout:hover { background: #313244; color: #cdd6f4; }
+    .hint { color: #6c7086; font-size: 0.85rem; margin-top: 1.5rem; }
+    .max-indicator { color: #6c7086; font-size: 0.8rem; margin-left: 0.5rem; }
+    h2 { margin: 2.5rem 0 0.75rem 0; font-size: 1.1rem; color: #cdd6f4; }
+    .audit { background: #313244; border-radius: 8px; overflow: hidden; font-size: 0.85rem; }
+    .audit table { background: transparent; }
+    .audit td { padding: 0.55rem 1rem; vertical-align: top; }
+    .audit .ts { color: #a6adc8; font-family: ui-monospace, monospace; white-space: nowrap; }
+    .audit .evt { font-family: ui-monospace, monospace; font-weight: 600; white-space: nowrap; }
+    .audit .evt-login, .audit .evt-activate, .audit .evt-extend, .audit .evt-connection_opened { color: #a6e3a1; }
+    .audit .evt-login_failed, .audit .evt-connection_rejected, .audit .evt-connection_error { color: #f38ba8; }
+    .audit .evt-deactivate, .audit .evt-logout, .audit .evt-connection_closed { color: #fab387; }
+    .audit .who { color: #89b4fa; }
+    .audit .svc { color: #f9e2af; }
+    .audit .ip-cell { color: #a6adc8; font-family: ui-monospace, monospace; }
+    .audit .empty { color: #6c7086; padding: 1rem; text-align: center; }
+    .audit .granted-by { color: #cba6f7; font-size: 0.8rem; }
+    .filters { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.75rem 0; }
+    .filters input, .filters select { background: #313244; color: #cdd6f4; border: 1px solid #45475a; border-radius: 5px; padding: 0.4rem 0.6rem; font-size: 0.85rem; font-family: inherit; }
+    .filters input:focus, .filters select:focus { outline: none; border-color: #89b4fa; }
+    .filters label { color: #a6adc8; font-size: 0.8rem; }
+    .filters .clear { background: transparent; color: #a6adc8; border: 1px solid #45475a; padding: 0.4rem 0.75rem; border-radius: 5px; cursor: pointer; font-size: 0.85rem; }
+    .filters .clear:hover { background: #313244; color: #cdd6f4; }
+    .filters .count { color: #6c7086; font-size: 0.8rem; margin-left: auto; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Auth TCP Proxy</h1>
+      <div class="meta">Signed in as <strong>{{ user }}</strong> · IP <span class="ip">{{ ip }}</span></div>
+    </div>
+    <form method="post" action="{{ url_for('logout') }}">
+      <button class="logout" type="submit">Sign out</button>
+    </form>
+  </header>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Service</th>
+        <th>Target</th>
+        <th>Status</th>
+        <th style="text-align:right">Actions</th>
+      </tr>
+    </thead>
+    <tbody id="rows">
+      {% for svc in services %}
+      <tr data-name="{{ svc.name }}">
+        <td>
+          <strong>{{ svc.name }}</strong>
+          <div class="target">{{ svc.listen_host }}:{{ svc.listen_port }}</div>
+        </td>
+        <td class="target">{{ svc.target_host }}:{{ svc.target_port }}</td>
+        <td class="status"><span class="status-inactive">—</span></td>
+        <td class="actions" style="text-align:right"></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="hint">
+    Activate grants your IP access for 1h. Extend adds 1h, capped at 8h remaining.
+    You can keep extending as time passes — there is no hard lifetime limit.
+  </div>
+
+  <h2>Audit log</h2>
+  <div class="filters">
+    <select id="f-category">
+      <option value="">all events</option>
+      <option value="auth">auth (login/logout)</option>
+      <option value="grant">grants (activate/extend/deactivate)</option>
+      <option value="connection">connections</option>
+      <option value="error">errors &amp; rejects</option>
+    </select>
+    <select id="f-service">
+      <option value="">all services</option>
+      {% for svc in services %}<option value="{{ svc.name }}">{{ svc.name }}</option>{% endfor %}
+    </select>
+    <input id="f-user" placeholder="user">
+    <input id="f-ip" placeholder="IP">
+    <button class="clear" id="f-clear" type="button">Clear</button>
+    <span class="count" id="f-count"></span>
+    <button class="clear" id="f-prev" type="button" disabled>← Prev</button>
+    <button class="clear" id="f-next" type="button" disabled>Next →</button>
+  </div>
+  <div class="audit">
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Event</th>
+          <th>User</th>
+          <th>IP</th>
+          <th>Service / detail</th>
+        </tr>
+      </thead>
+      <tbody id="audit-rows">
+        <tr><td class="empty" colspan="5">loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+<script>
+const MAX_SECONDS = 8 * 3600;
+let grants = {};
+
+function fmt(sec) {
+  if (sec <= 0) return "expired";
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/status', { credentials: 'same-origin' });
+    if (r.status === 401) { window.location = '/login'; return; }
+    const data = await r.json();
+    grants = data.grants || {};
+  } catch (e) { /* network hiccup, keep last state */ }
+  render();
+}
+
+function render() {
+  const now = Date.now() / 1000;
+  document.querySelectorAll('tr[data-name]').forEach(tr => {
+    const name = tr.dataset.name;
+    const exp = grants[name];
+    const statusCell = tr.querySelector('.status');
+    const actionsCell = tr.querySelector('.actions');
+    if (exp && exp > now) {
+      const remaining = exp - now;
+      const atMax = remaining >= MAX_SECONDS - 30;
+      statusCell.innerHTML = `<span class="status-active">active</span> <span class="countdown">${fmt(remaining)}</span>`;
+      actionsCell.innerHTML = `
+        <button class="btn-primary" ${atMax ? 'disabled title="at 8h cap"' : ''} data-action="extend" data-name="${name}">Extend +1h</button>
+        <button class="btn-danger" data-action="deactivate" data-name="${name}">Deactivate</button>
+      `;
+    } else {
+      statusCell.innerHTML = `<span class="status-inactive">inactive</span>`;
+      actionsCell.innerHTML = `<button class="btn-primary" data-action="activate" data-name="${name}">Activate</button>`;
+    }
+  });
+}
+
+document.getElementById('rows').addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('button[data-action]');
+  if (!btn) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/${btn.dataset.action}/${encodeURIComponent(btn.dataset.name)}`, {
+      method: 'POST',
+      credentials: 'same-origin',
+    });
+    if (r.status === 401) { window.location = '/login'; return; }
+  } finally {
+    await refresh();
+  }
+});
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+const PAGE_SIZE = 50;
+let auditOffset = 0;
+let auditTotal = 0;
+
+function fmtAuditDetail(e) {
+  const parts = [];
+  if (e.expires_at) {
+    const d = new Date(e.expires_at * 1000);
+    parts.push(`until ${d.toLocaleTimeString()}`);
+  }
+  if (e.granted_by) parts.push(`granted by ${e.granted_by}`);
+  if (e.error) parts.push(`error: ${e.error}`);
+  return parts.join(' · ');
+}
+
+function actorFor(e) {
+  if (e.event && e.event.startsWith('connection_')) return e.granted_by || null;
+  return e.user || null;
+}
+
+function currentFilters() {
+  return {
+    category: document.getElementById('f-category').value,
+    service: document.getElementById('f-service').value,
+    user: document.getElementById('f-user').value.trim(),
+    ip: document.getElementById('f-ip').value.trim(),
+  };
+}
+
+async function refreshAudit(resetPage = false) {
+  if (resetPage) auditOffset = 0;
+  const f = currentFilters();
+  const params = new URLSearchParams({ offset: auditOffset, limit: PAGE_SIZE });
+  for (const [k, v] of Object.entries(f)) if (v) params.set(k, v);
+
+  try {
+    const r = await fetch('/api/audit?' + params, { credentials: 'same-origin' });
+    if (r.status === 401) { window.location = '/login'; return; }
+    const data = await r.json();
+    auditTotal = data.total || 0;
+    renderAudit(data.events || []);
+  } catch (e) { /* ignore */ }
+}
+
+function renderAudit(events) {
+  const rows = document.getElementById('audit-rows');
+  const start = auditTotal ? auditOffset + 1 : 0;
+  const end = Math.min(auditOffset + events.length, auditTotal);
+  document.getElementById('f-count').textContent =
+    auditTotal ? `${start}–${end} of ${auditTotal}` : '0 events';
+  document.getElementById('f-prev').disabled = auditOffset === 0;
+  document.getElementById('f-next').disabled = end >= auditTotal;
+
+  if (!events.length) {
+    rows.innerHTML = '<tr><td class="empty" colspan="5">no matching events</td></tr>';
+    return;
+  }
+  rows.innerHTML = events.map(e => {
+    const ts = e.ts.replace('T', ' ').replace('Z', '');
+    const isConn = e.event && e.event.startsWith('connection_');
+    const actor = actorFor(e);
+    const userCell = actor
+      ? `<span class="who">${escapeHtml(actor)}</span>` +
+        (isConn ? ' <span class="granted-by">(granted)</span>' : '')
+      : '—';
+    return `<tr>
+      <td class="ts">${escapeHtml(ts)}</td>
+      <td class="evt evt-${escapeHtml(e.event)}">${escapeHtml(e.event)}</td>
+      <td>${userCell}</td>
+      <td class="ip-cell">${escapeHtml(e.ip || '—')}</td>
+      <td class="svc">${escapeHtml(e.service || '')} <span style="color:#6c7086">${escapeHtml(fmtAuditDetail(e))}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+['f-category', 'f-service', 'f-user', 'f-ip'].forEach(id => {
+  const el = document.getElementById(id);
+  el.addEventListener('input', () => refreshAudit(true));
+  el.addEventListener('change', () => refreshAudit(true));
+});
+document.getElementById('f-clear').addEventListener('click', () => {
+  ['f-category', 'f-service', 'f-user', 'f-ip'].forEach(id => {
+    document.getElementById(id).value = '';
+  });
+  refreshAudit(true);
+});
+document.getElementById('f-prev').addEventListener('click', () => {
+  auditOffset = Math.max(0, auditOffset - PAGE_SIZE);
+  refreshAudit(false);
+});
+document.getElementById('f-next').addEventListener('click', () => {
+  auditOffset = auditOffset + PAGE_SIZE;
+  refreshAudit(false);
+});
+
+refresh();
+refreshAudit(true);
+setInterval(render, 1000);
+setInterval(refresh, 10000);
+// Only auto-refresh the audit view when on the first page; otherwise the user
+// is browsing history and we don't want rows shifting under them.
+setInterval(() => { if (auditOffset === 0) refreshAudit(false); }, 5000);
+</script>
+</body>
+</html>

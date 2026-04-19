@@ -1,0 +1,27 @@
+services:
+  auth-proxy:
+    build: .
+    ports:
+      - "8080:8080"   # web UI
+      - "5432:5432"   # postgres proxy
+      - "8888:8888"   # web-target proxy
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./logs:/app/logs
+    depends_on:
+      - postgres
+      - nginx
+    restart: unless-stopped
+
+  # Target service #1 — real Postgres for testing psql through the proxy.
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: testpass
+      POSTGRES_USER: testuser
+      POSTGRES_DB: testdb
+    # No host port mapping: reachable only via auth-proxy.
+
+  # Target service #2 — plain nginx so you can curl through the proxy.
+  nginx:
+    image: nginx:alpine
