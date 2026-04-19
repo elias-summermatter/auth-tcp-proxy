@@ -20,6 +20,24 @@ GITHUB_TOKEN = "https://github.com/login/oauth/access_token"
 GITHUB_API = "https://api.github.com"
 
 
+def _safe_next(target: str | None) -> str | None:
+    """Return target if it's a local path, else None. Blocks open redirects
+    to attacker-controlled hosts via `?next=https://evil.com/...`."""
+    if not target:
+        return None
+    # Reject anything with a scheme/host, and protocol-relative paths like
+    # "//evil.com/x" and "/\\evil.com/x" which browsers treat as absolute.
+    if not target.startswith("/"):
+        return None
+    if target.startswith("//") or target.startswith("/\\"):
+        return None
+    from urllib.parse import urlparse
+    p = urlparse(target)
+    if p.scheme or p.netloc:
+        return None
+    return target
+
+
 def load_config(path: str) -> dict:
     with open(path) as f:
         return yaml.safe_load(f)
@@ -168,7 +186,7 @@ def create_app(config: dict) -> Flask:
                 session["user"] = u
                 session.pop("oauth_admin", None)
                 audit.record("login", user=u, ip=request.remote_addr, via="password")
-                return redirect(request.args.get("next") or url_for("dashboard"))
+                return redirect(_safe_next(request.args.get("next")) or url_for("dashboard"))
             audit.record("login_failed", user=u or None, ip=request.remote_addr,
                          via="password")
             error = "Invalid username or password"
@@ -182,7 +200,7 @@ def create_app(config: dict) -> Flask:
             abort(404)
         state = secrets.token_urlsafe(32)
         session["oauth_state"] = state
-        if (nxt := request.args.get("next")):
+        if (nxt := _safe_next(request.args.get("next"))):
             session["oauth_next"] = nxt
         params = {
             "client_id": github_cfg["client_id"],
@@ -277,7 +295,7 @@ def create_app(config: dict) -> Flask:
         session["oauth_verified_at"] = time.time()
         audit.record("login", user=login_name, ip=request.remote_addr,
                      via="github", admin_via_team=oauth_admin or None)
-        return redirect(next_url or url_for("dashboard"))
+        return redirect(_safe_next(next_url) or url_for("dashboard"))
 
     @app.route("/logout", methods=["POST"])
     def logout():
