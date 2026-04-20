@@ -147,18 +147,31 @@ def create_app(config: dict) -> Flask:
     def _session_max_age():
         # Absolute 24h cap from login time, regardless of activity. A stolen
         # session cookie expires with the original login, not when the thief
-        # stops using it.
+        # stops using it. Also kills sessions whose user was revoked/deleted
+        # after they logged in — closes the "delete user, they re-register
+        # with the stolen cookie" gap.
         u = session.get("user")
         if not u:
             return
         login_at = session.get("login_at")
-        if login_at and time.time() - login_at <= SESSION_MAX_AGE_SECONDS:
-            return
-        audit.record("session_expired", user=u, ip=request.remote_addr)
-        session.clear()
-        if request.path.startswith("/api/"):
-            return jsonify({"error": "session expired"}), 401
-        return redirect(url_for("login"))
+        if not login_at:
+            audit.record("session_expired", user=u, ip=request.remote_addr)
+            session.clear()
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "session expired"}), 401
+            return redirect(url_for("login"))
+        if time.time() - login_at > SESSION_MAX_AGE_SECONDS:
+            audit.record("session_expired", user=u, ip=request.remote_addr)
+            session.clear()
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "session expired"}), 401
+            return redirect(url_for("login"))
+        if gateway.is_session_stale(u, login_at):
+            audit.record("session_invalidated", user=u, ip=request.remote_addr)
+            session.clear()
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "session invalidated"}), 401
+            return redirect(url_for("login"))
 
     @app.after_request
     def _security_headers(resp):

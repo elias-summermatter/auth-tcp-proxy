@@ -94,6 +94,12 @@ class Gateway:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.enable_netfilter = bool(config.get("enable_netfilter", True))
 
+        # Sessions created before user_session_cutoff[username] are treated
+        # as invalidated and cleared by app.py on the next request. Updated
+        # whenever an admin revokes or deletes a user — closes the gap where
+        # a stolen session cookie could re-register after revoke/delete.
+        self.user_session_cutoff: dict[str, float] = {}
+
         self.services: dict[str, Service] = {}
         for s in config.get("services", []):
             svc = Service(
@@ -114,6 +120,7 @@ class Gateway:
 
         self.server_keys = self._load_or_create_server_keys()
         self._load_users()
+        self._load_session_cutoffs()
 
     # --- persistent state -------------------------------------------------
 
@@ -149,6 +156,33 @@ class Gateway:
         tmp = p.with_suffix(".tmp")
         tmp.write_text(json.dumps(self.users, indent=2))
         tmp.replace(p)
+
+    def _session_cutoffs_path(self) -> Path:
+        return self.state_dir / "session_cutoffs.json"
+
+    def _load_session_cutoffs(self) -> None:
+        p = self._session_cutoffs_path()
+        if p.exists():
+            try:
+                self.user_session_cutoff = {k: float(v) for k, v in json.loads(p.read_text()).items()}
+            except Exception as e:
+                log.warning("could not load session_cutoffs.json: %s", e)
+
+    def _save_session_cutoffs(self) -> None:
+        p = self._session_cutoffs_path()
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.user_session_cutoff, indent=2))
+        tmp.replace(p)
+
+    def is_session_stale(self, username: str, login_at: float) -> bool:
+        """Return True if a session for `username` with the given login_at
+        was created before the most recent revoke/delete of that username."""
+        cutoff = self.user_session_cutoff.get(username)
+        return cutoff is not None and login_at < cutoff
+
+    def _mark_sessions_invalid(self, username: str) -> None:
+        self.user_session_cutoff[username] = time.time()
+        self._save_session_cutoffs()
 
     # --- lifecycle --------------------------------------------------------
 
@@ -465,6 +499,7 @@ class Gateway:
             u["public_key"] = None
             u["preshared_key"] = None
             self._save_users()
+            self._mark_sessions_invalid(username)
         log.info("revoked user=%s ip=%s (policy preserved)", username, u.get("ip"))
         return True
 
@@ -491,6 +526,7 @@ class Gateway:
                 except Exception as e:
                     log.warning("wg peer remove failed for %s: %s", username, e)
             self._save_users()
+            self._mark_sessions_invalid(username)
         log.info("deleted user=%s ip=%s (all policy erased)", username, u.get("ip"))
         return True
 

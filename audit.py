@@ -14,7 +14,8 @@ log = logging.getLogger(__name__)
 
 CATEGORY = {
     "login": "auth", "login_failed": "auth", "logout": "auth",
-    "session_revoked": "auth",
+    "session_revoked": "auth", "session_invalidated": "auth",
+    "session_expired": "auth",
     "activate": "grant", "extend": "grant", "deactivate": "grant",
     "grant_expired": "grant", "wg_config_generated": "grant",
     "user_revoked": "admin", "user_deleted": "admin", "admin_deactivate": "admin",

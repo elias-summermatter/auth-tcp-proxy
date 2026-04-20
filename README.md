@@ -438,7 +438,7 @@ JSON Lines at `logs/audit.log`, one event per line:
 ```
 
 Events you'll see: `login`, `login_failed`, `logout`, `session_revoked`,
-`session_expired`, `wg_config_generated`, `activate`, `extend`,
+`session_expired`, `session_invalidated`, `wg_config_generated`, `activate`, `extend`,
 `deactivate`, `grant_expired`, `user_revoked`, `admin_deactivate`,
 `service_blocked`, `service_unblocked`, `service_approved`,
 `service_approval_revoked`, `user_locked`, `user_unlocked`,
