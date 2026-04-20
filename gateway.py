@@ -729,6 +729,11 @@ class Gateway:
 
     def _run_local_checks(self) -> None:
         for svc in list(self.services.values()):
+            # Mesh services have no hostname/port to probe — there is no
+            # "reachable from the gateway" question to ask. Skip entirely
+            # so their row doesn't carry useless amber "check failed" chips.
+            if svc.kind == "mesh":
+                continue
             try:
                 ok, err = self._check_local_reachability(svc)
             except Exception as e:  # defensive: never let the thread die
@@ -781,6 +786,9 @@ class Gateway:
 
     def _run_public_checks(self) -> None:
         for svc in list(self.services.values()):
+            # Mesh services have no public-facing endpoint to probe.
+            if svc.kind == "mesh":
+                continue
             try:
                 is_open, err = self._check_public_exposure(svc)
             except Exception as e:
@@ -807,8 +815,12 @@ class Gateway:
         for name, entry in self.service_health.items():
             snapshot[name] = dict(entry)
         # Fill in unknown placeholders for services that haven't been
-        # probed yet, so the frontend can reason uniformly.
-        for name in self.services:
+        # probed yet, so the frontend can reason uniformly. Mesh services
+        # are skipped entirely — they have no probe target, so the row
+        # shouldn't display any health chips at all.
+        for name, svc in self.services.items():
+            if svc.kind == "mesh":
+                continue
             snapshot.setdefault(name, {
                 "local_ok": None, "local_error": "pending", "local_checked_at": None,
                 "public_open": None,
