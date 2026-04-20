@@ -3,11 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
+  <meta name="referrer" content="no-referrer">
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='logo.svg') }}">
   <title>Secure Infrastructure Gateway</title>
   <style>
     :root { color-scheme: dark; }
     body { font-family: system-ui, -apple-system, sans-serif; background: #1e1e2e; color: #cdd6f4; margin: 0; padding: 2rem; max-width: 1100px; margin: 0 auto; }
     header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; flex-wrap: wrap; gap: 1rem; }
+    .brand { display: flex; align-items: center; gap: 0.85rem; }
+    .brand img { width: 40px; height: 40px; flex-shrink: 0; filter: drop-shadow(0 2px 6px rgba(137, 180, 250, 0.25)); }
     h1 { margin: 0 0 0.25rem 0; font-size: 1.5rem; }
     h2 { margin: 2.5rem 0 0.75rem 0; font-size: 1.1rem; color: #cdd6f4; }
     .meta { color: #a6adc8; font-size: 0.9rem; }
@@ -88,12 +93,15 @@
 </head>
 <body data-has-config="{{ 'true' if has_config else 'false' }}" data-is-admin="{{ 'true' if is_admin else 'false' }}">
   <header>
-    <div>
-      <h1>Secure Infrastructure Gateway</h1>
-      <div class="meta">
-        Signed in as <strong>{{ user }}</strong>{% if is_admin %} <span class="badge-admin">admin</span>{% endif %}
-        {% if wg_ip %} · WG IP <span class="ip">{{ wg_ip }}</span>{% endif %}
-        · Endpoint <span class="ip">{{ endpoint }}</span>
+    <div class="brand">
+      <img src="{{ url_for('static', filename='logo.svg') }}" alt="">
+      <div>
+        <h1>Secure Infrastructure Gateway</h1>
+        <div class="meta">
+          Signed in as <strong>{{ user }}</strong>{% if is_admin %} <span class="badge-admin">admin</span>{% endif %}
+          {% if wg_ip %} · WG IP <span class="ip">{{ wg_ip }}</span>{% endif %}
+          · Endpoint <span class="ip">{{ endpoint }}</span>
+        </div>
       </div>
     </div>
     <div style="display:flex;gap:0.5rem;align-items:center">

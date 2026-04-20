@@ -1,5 +1,25 @@
 # Replace gateway.example.com with the hostname pointing at this VM.
 # Caddy will fetch a Let's Encrypt cert automatically on first start.
+#
+# Any request arriving with a Host header that doesn't match this site
+# (e.g. a scanner hitting the VM's raw IP) gets a default 4xx from Caddy
+# and never reaches Flask — the app is only discoverable if you already
+# know the hostname.
+
 gateway.example.com {
-    reverse_proxy gateway:8080
+    header {
+        # Stealth: suppress server-software banners and forbid indexing at
+        # the proxy layer (defense in depth; Flask also sets these).
+        -Server
+        -X-Powered-By
+        -Via
+        X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex"
+        Referrer-Policy no-referrer
+    }
+    reverse_proxy gateway:8080 {
+        # Don't announce the Caddy hop on requests forwarded upstream, and
+        # strip it from the response on the way back to the client.
+        header_up -Via
+        header_down -Via
+    }
 }

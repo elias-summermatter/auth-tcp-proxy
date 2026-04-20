@@ -24,6 +24,67 @@ GITHUB_API = "https://api.github.com"
 
 SESSION_MAX_AGE_SECONDS = 24 * 3600
 
+# Disallow every crawler we can name, then a catch-all wildcard. Some bots
+# only honour their own explicit name in robots.txt so the named entries
+# matter; the final "User-agent: *" covers everything else.
+ROBOTS_TXT = """\
+User-agent: GPTBot
+Disallow: /
+User-agent: ChatGPT-User
+Disallow: /
+User-agent: OAI-SearchBot
+Disallow: /
+User-agent: anthropic-ai
+Disallow: /
+User-agent: ClaudeBot
+Disallow: /
+User-agent: Claude-Web
+Disallow: /
+User-agent: Google-Extended
+Disallow: /
+User-agent: Googlebot
+Disallow: /
+User-agent: Bingbot
+Disallow: /
+User-agent: CCBot
+Disallow: /
+User-agent: PerplexityBot
+Disallow: /
+User-agent: Bytespider
+Disallow: /
+User-agent: Amazonbot
+Disallow: /
+User-agent: Applebot
+Disallow: /
+User-agent: Applebot-Extended
+Disallow: /
+User-agent: FacebookBot
+Disallow: /
+User-agent: Meta-ExternalAgent
+Disallow: /
+User-agent: cohere-ai
+Disallow: /
+User-agent: DuckAssistBot
+Disallow: /
+User-agent: YandexBot
+Disallow: /
+User-agent: Omgili
+Disallow: /
+User-agent: Omgilibot
+Disallow: /
+User-agent: ImagesiftBot
+Disallow: /
+User-agent: Diffbot
+Disallow: /
+User-agent: Timpibot
+Disallow: /
+User-agent: PanguBot
+Disallow: /
+
+User-agent: *
+Disallow: /
+"""
+
 
 def _safe_next(target: str | None) -> str | None:
     """Return target if it's a local path, else None. Blocks open redirects
@@ -186,6 +247,15 @@ def create_app(config: dict) -> Flask:
             "Strict-Transport-Security",
             "max-age=31536000; includeSubDomains",
         )
+        # Belt + suspenders against search engines and AI crawlers. Meta
+        # tags in templates cover the HTML path; this header covers every
+        # response including JSON/SVG/robots.txt itself.
+        resp.headers.setdefault(
+            "X-Robots-Tag",
+            "noindex, nofollow, noarchive, nosnippet, noimageindex",
+        )
+        # Suppress default Server/Werkzeug fingerprinting where we can.
+        resp.headers.pop("Server", None)
         # Templates use inline <script> and <style> blocks, so 'unsafe-inline'
         # is required; default-src 'self' still blocks external resource loads
         # and frame-ancestors 'none' blocks clickjacking.
@@ -243,6 +313,10 @@ def create_app(config: dict) -> Flask:
                 return jsonify({"error": "admin required"}), 403
             return f(*a, **kw)
         return wrapper
+
+    @app.route("/robots.txt")
+    def robots_txt():
+        return Response(ROBOTS_TXT, mimetype="text/plain")
 
     @app.route("/login", methods=["GET", "POST"])
     @limiter.limit("10 per minute; 50 per hour", methods=["POST"])
