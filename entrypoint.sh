@@ -10,4 +10,14 @@ if [ -w /proc/sys/net/ipv4/ip_forward ]; then
   echo 1 > /proc/sys/net/ipv4/ip_forward || true
 fi
 
-exec python -u /app/app.py
+# Single worker is mandatory: the gateway holds in-memory grant state and
+# owns the WG interface / iptables rules. Multiple workers would race. Use
+# threads for concurrency within that one worker.
+exec gunicorn \
+  --bind 0.0.0.0:8080 \
+  --workers 1 \
+  --threads 8 \
+  --timeout 60 \
+  --access-logfile - \
+  --error-logfile - \
+  wsgi:app

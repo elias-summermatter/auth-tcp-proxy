@@ -1,8 +1,12 @@
 services:
   gateway:
     build: .
+    cap_drop:
+      - ALL
     cap_add:
       - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
     devices:
       - /dev/net/tun:/dev/net/tun
     sysctls:
@@ -22,6 +26,12 @@ services:
   # at this VM and ports 80/443 open.
   caddy:
     image: caddy:2-alpine
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
     ports:
       - "80:80"
       - "443:443"

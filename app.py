@@ -3,6 +3,7 @@ import os
 import secrets
 import sys
 import time
+from datetime import timedelta
 from functools import wraps
 from urllib.parse import urlencode
 
@@ -11,6 +12,8 @@ import requests
 import yaml
 from flask import (Flask, Response, abort, jsonify, redirect, render_template,
                    request, session, url_for)
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 from audit import AuditLog
 from gateway import Gateway
@@ -18,6 +21,8 @@ from gateway import Gateway
 GITHUB_AUTHORIZE = "https://github.com/login/oauth/authorize"
 GITHUB_TOKEN = "https://github.com/login/oauth/access_token"
 GITHUB_API = "https://api.github.com"
+
+SESSION_MAX_AGE_SECONDS = 24 * 3600
 
 
 def _safe_next(target: str | None) -> str | None:
@@ -51,10 +56,20 @@ def create_app(config: dict) -> Flask:
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SECURE"] = config.get("session_cookie_secure", False)
+    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(seconds=SESSION_MAX_AGE_SECONDS)
 
     if config.get("trust_proxy", False):
         from werkzeug.middleware.proxy_fix import ProxyFix
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+    # Per-IP rate limiting. Storage is in-process memory, which is fine given
+    # gunicorn runs with a single worker (mandated by the stateful gateway).
+    limiter = Limiter(
+        key_func=get_remote_address,
+        storage_uri="memory://",
+        default_limits=[],
+    )
+    limiter.init_app(app)
 
     users = config.get("users", {})
     admins = set(config.get("admins", []))
@@ -129,6 +144,52 @@ def create_app(config: dict) -> Flask:
         return True, is_admin_via_team, ""
 
     @app.before_request
+    def _session_max_age():
+        # Absolute 24h cap from login time, regardless of activity. A stolen
+        # session cookie expires with the original login, not when the thief
+        # stops using it.
+        u = session.get("user")
+        if not u:
+            return
+        login_at = session.get("login_at")
+        if login_at and time.time() - login_at <= SESSION_MAX_AGE_SECONDS:
+            return
+        audit.record("session_expired", user=u, ip=request.remote_addr)
+        session.clear()
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "session expired"}), 401
+        return redirect(url_for("login"))
+
+    @app.after_request
+    def _security_headers(resp):
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("Referrer-Policy", "no-referrer")
+        resp.headers.setdefault(
+            "Permissions-Policy",
+            "camera=(), microphone=(), geolocation=(), interest-cohort=()",
+        )
+        resp.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
+        )
+        # Templates use inline <script> and <style> blocks, so 'unsafe-inline'
+        # is required; default-src 'self' still blocks external resource loads
+        # and frame-ancestors 'none' blocks clickjacking.
+        resp.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "connect-src 'self'; "
+            "form-action 'self'; "
+            "frame-ancestors 'none'; "
+            "base-uri 'self'",
+        )
+        return resp
+
+    @app.before_request
     def _oauth_reverify():
         # Only applies to OAuth sessions (password sessions have no token).
         if "oauth_token" not in session:
@@ -171,6 +232,7 @@ def create_app(config: dict) -> Flask:
         return wrapper
 
     @app.route("/login", methods=["GET", "POST"])
+    @limiter.limit("10 per minute; 50 per hour", methods=["POST"])
     def login():
         error = None
         if request.method == "POST":
@@ -183,7 +245,9 @@ def create_app(config: dict) -> Flask:
             p = request.form.get("password", "")
             user = users.get(u)
             if user and bcrypt.checkpw(p.encode(), user["password_hash"].encode()):
+                session.permanent = True
                 session["user"] = u
+                session["login_at"] = time.time()
                 session.pop("oauth_admin", None)
                 audit.record("login", user=u, ip=request.remote_addr, via="password")
                 return redirect(_safe_next(request.args.get("next")) or url_for("dashboard"))
@@ -195,6 +259,7 @@ def create_app(config: dict) -> Flask:
                                password_enabled=bool(users))
 
     @app.route("/oauth/github/login")
+    @limiter.limit("30 per minute")
     def oauth_github_login():
         if github_cfg is None:
             abort(404)
@@ -212,6 +277,7 @@ def create_app(config: dict) -> Flask:
         return redirect(f"{GITHUB_AUTHORIZE}?{urlencode(params)}")
 
     @app.route("/oauth/github/callback")
+    @limiter.limit("30 per minute")
     def oauth_github_callback():
         if github_cfg is None:
             abort(404)
@@ -289,7 +355,9 @@ def create_app(config: dict) -> Flask:
                                    error=f"Access denied: {denial_reason}.",
                                    github_enabled=True), 403
 
+        session.permanent = True
         session["user"] = login_name
+        session["login_at"] = time.time()
         session["oauth_admin"] = oauth_admin
         session["oauth_token"] = access_token
         session["oauth_verified_at"] = time.time()
