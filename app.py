@@ -414,8 +414,9 @@ def create_app(config: dict) -> Flask:
                 timeout=10,
             )
         except requests.RequestException as e:
+            app.logger.warning("github /user fetch failed: %s", e)
             return render_template("login.html",
-                                   error=f"GitHub API error: {e}",
+                                   error="GitHub is currently unreachable. Please try again.",
                                    github_enabled=True), 502
         if user_resp.status_code != 200:
             return render_template("login.html",
@@ -431,15 +432,22 @@ def create_app(config: dict) -> Flask:
             allowed, oauth_admin, denial_reason = _verify_github_access(
                 access_token, login_name)
         except requests.RequestException as e:
+            app.logger.warning("github membership check failed for %s: %s",
+                               login_name, e)
             return render_template("login.html",
-                                   error=f"GitHub membership check failed: {e}",
+                                   error="GitHub is currently unreachable. Please try again.",
                                    github_enabled=True), 502
 
         if not allowed:
+            # denial_reason names the required org/team — keep it in the
+            # audit log for admin visibility, but never surface it to an
+            # unauthenticated visitor who just failed the membership check.
             audit.record("login_failed", user=login_name, ip=request.remote_addr,
                          via="github", reason=denial_reason)
+            app.logger.info("github access denied for %s: %s",
+                            login_name, denial_reason)
             return render_template("login.html",
-                                   error=f"Access denied: {denial_reason}.",
+                                   error="Access denied. Contact your administrator if you think this is a mistake.",
                                    github_enabled=True), 403
 
         session.permanent = True
@@ -524,9 +532,15 @@ def create_app(config: dict) -> Flask:
         try:
             exp = gateway.activate(u, name, source_ip=src)
         except PermissionError as e:
+            # Safe to echo: these messages describe the user's own state
+            # (blocked / requires approval) that they can already see on
+            # their dashboard.
             return jsonify({"error": str(e)}), 403
         except Exception as e:
-            return jsonify({"error": str(e)}), 400
+            # Don't echo unexpected exception strings — subprocess errors,
+            # iptables failures, etc. can leak internal paths or commands.
+            app.logger.warning("activate failed user=%s svc=%s: %s", u, name, e)
+            return jsonify({"error": "could not activate this service"}), 500
         audit.record("activate", user=u, ip=src, service=name,
                      expires_at=exp, wg_ip=gateway.user_ip(u))
         return jsonify({"service": name, "expires_at": exp})
@@ -545,7 +559,8 @@ def create_app(config: dict) -> Flask:
         except PermissionError as e:
             return jsonify({"error": str(e)}), 403
         except Exception as e:
-            return jsonify({"error": str(e)}), 400
+            app.logger.warning("extend failed user=%s svc=%s: %s", u, name, e)
+            return jsonify({"error": "could not extend this service"}), 500
         audit.record("extend", user=u, ip=src, service=name,
                      expires_at=exp, wg_ip=gateway.user_ip(u))
         return jsonify({"service": name, "expires_at": exp})
