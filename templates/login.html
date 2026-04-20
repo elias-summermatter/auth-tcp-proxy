@@ -5,7 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Sign in — Secure Infrastructure Gateway</title>
   <style>
-    body { font-family: system-ui, -apple-system, sans-serif; background: #1e1e2e; color: #cdd6f4; display: flex; min-height: 100vh; align-items: center; justify-content: center; margin: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #1e1e2e; color: #cdd6f4; display: flex; flex-direction: column; min-height: 100vh; align-items: center; justify-content: center; margin: 0; }
+    .page-footer { margin-top: 2rem; color: #6c7086; font-size: 0.85rem; text-align: center; }
+    .page-footer a { color: #89b4fa; text-decoration: none; }
+    .page-footer a:hover { color: #74c7ec; text-decoration: underline; }
     form { background: #313244; padding: 2rem; border-radius: 10px; min-width: 340px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); }
     h1 { margin: 0 0 0.25rem 0; font-size: 1.25rem; }
     .subtitle { color: #a6adc8; font-size: 0.85rem; margin-bottom: 1.5rem; }
@@ -42,5 +45,9 @@
     <button type="submit">Sign in</button>
     {% endif %}
   </form>
+  <footer class="page-footer">
+    Developed by Elias Summermatter ·
+    <a href="https://github.com/elias-summermatter/secure-infrastructure-gateway" target="_blank" rel="noopener">GitHub</a>
+  </footer>
 </body>
 </html>

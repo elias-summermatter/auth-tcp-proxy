@@ -79,6 +79,10 @@
     .modal-ack { display: flex; gap: 0.6rem; align-items: flex-start; padding: 0.75rem; background: #1e1e2e; border-radius: 6px; border: 1px solid #45475a; cursor: pointer; font-size: 0.9rem; line-height: 1.45; }
     .modal-ack input { margin-top: 0.2rem; flex-shrink: 0; cursor: pointer; }
     .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.25rem; }
+
+    footer { margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid #313244; color: #6c7086; font-size: 0.85rem; text-align: center; }
+    footer a { color: #89b4fa; text-decoration: none; }
+    footer a:hover { color: #74c7ec; text-decoration: underline; }
   </style>
 </head>
 <body data-has-config="{{ 'true' if has_config else 'false' }}" data-is-admin="{{ 'true' if is_admin else 'false' }}">
@@ -237,6 +241,11 @@
   </div>
 
   {% endif %}
+
+  <footer>
+    Developed by Elias Summermatter ·
+    <a href="https://github.com/elias-summermatter/secure-infrastructure-gateway" target="_blank" rel="noopener">GitHub</a>
+  </footer>
 
 <script>
 const MAX_SECONDS = 8 * 3600;
