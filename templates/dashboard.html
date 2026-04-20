@@ -305,6 +305,27 @@ function fmt(sec) {
   return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
 }
 
+// All timestamps are persisted in UTC. Display in the operator-configured
+// timezone (TZ env var on the container, see docker-compose.yml) so the
+// whole team sees a consistent clock regardless of where each viewer is.
+const TZ = {{ display_tz | tojson }};
+const FMT_DATETIME = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: TZ,
+  year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', second: '2-digit',
+  hour12: false,
+});
+function fmtInstant(date) {
+  // sv-SE gives "YYYY-MM-DD HH:MM:SS" which is readable and sortable.
+  return FMT_DATETIME.format(date).replace(',', '');
+}
+function fmtAuditTs(isoUtc) {
+  // Backend writes strings like "2026-04-20T09:12:33Z".
+  const d = new Date(isoUtc);
+  if (isNaN(d.getTime())) return isoUtc;
+  return fmtInstant(d);
+}
+
 async function refresh() {
   try {
     const r = await fetch('/api/status', { credentials: 'same-origin' });
@@ -439,7 +460,7 @@ function renderUsers() {
       approvedCell = `${approvedChips || '<span class="no-entry">none</span>'}<div>${approvalPicker}</div>`;
     }
 
-    const created = u.created_at ? new Date(u.created_at * 1000).toLocaleString() : '—';
+    const created = u.created_at ? fmtInstant(new Date(u.created_at * 1000)) : '—';
     const fullyLocked = ALL_SERVICES.length > 0 && ALL_SERVICES.every(s => blockedSet.has(s));
     const lockBtn = fullyLocked
       ? `<button class="btn-secondary" data-unlock="${uname}" title="Allow access again">Unlock</button>`
@@ -586,11 +607,15 @@ const PAGE_SIZE = 50;
 let auditOffset = 0;
 let auditTotal = 0;
 
+const FMT_TIME = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: TZ,
+  hour: '2-digit', minute: '2-digit', second: '2-digit',
+  hour12: false,
+});
 function fmtAuditDetail(e) {
   const parts = [];
   if (e.expires_at) {
-    const d = new Date(e.expires_at * 1000);
-    parts.push(`until ${d.toLocaleTimeString()}`);
+    parts.push(`until ${FMT_TIME.format(new Date(e.expires_at * 1000))}`);
   }
   if (e.error) parts.push(`error: ${e.error}`);
   return parts.join(' · ');
@@ -633,7 +658,7 @@ function renderAudit(events) {
     return;
   }
   rows.innerHTML = events.map(e => {
-    const ts = e.ts.replace('T', ' ').replace('Z', '');
+    const ts = fmtAuditTs(e.ts);
     return `<tr>
       <td class="ts">${escapeHtml(ts)}</td>
       <td class="evt evt-${escapeHtml(e.event)}">${escapeHtml(e.event)}</td>

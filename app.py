@@ -123,6 +123,16 @@ def create_app(config: dict) -> Flask:
         from werkzeug.middleware.proxy_fix import ProxyFix
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
+    # Timezone the UI renders human-visible timestamps in. Audit log and
+    # persisted times stay in UTC; this only affects display. Controlled by
+    # the container's TZ env var (see docker-compose.yml / Dockerfile), so
+    # operators can set their own by overriding that one variable.
+    display_tz = os.environ.get("TZ") or "UTC"
+
+    @app.context_processor
+    def _inject_display_tz():
+        return {"display_tz": display_tz}
+
     # Per-IP rate limiting. Storage is in-process memory, which is fine given
     # gunicorn runs with a single worker (mandated by the stateful gateway).
     limiter = Limiter(

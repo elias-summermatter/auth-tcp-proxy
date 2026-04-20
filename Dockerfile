@@ -15,7 +15,11 @@ RUN apt-get update \
       conntrack \
       ca-certificates \
       tini \
+      tzdata \
  && rm -rf /var/lib/apt/lists/*
+
+# Default timezone; override via `TZ` env in docker-compose.yml.
+ENV TZ=Europe/Zurich
 
 COPY requirements.txt .
 RUN pip install -r requirements.txt
