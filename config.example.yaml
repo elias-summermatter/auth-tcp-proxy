@@ -1,105 +1,130 @@
-# Copy to config.yaml and customise. Password hash below is bcrypt("admin") —
-# change it with hash_password.py before any non-local use.
+# Copy this file to config.yaml and fill in every value marked REPLACE_ME.
+# Nothing in this example is a working credential.
 
-secret_key: "CHANGE-ME-TO-A-LONG-RANDOM-STRING"
+# ---- Core ---------------------------------------------------------------
+
+# Flask session key. Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+secret_key: "REPLACE_ME_WITH_A_LONG_RANDOM_STRING"
 
 # Web UI
 web:
   host: "0.0.0.0"
   port: 8080
+
+# Set true when running behind a TLS-terminating reverse proxy that sets
+# X-Forwarded-For / X-Forwarded-Proto (nginx, Caddy, Traefik, ...).
 trust_proxy: false
+
+# Set true in production so session cookies are only sent over HTTPS.
 session_cookie_secure: false
 
-# Audit
+# ---- Audit --------------------------------------------------------------
+
 audit_log_path: "logs/audit.log"
 audit_rotation: "weekly"   # weekly | daily | off
 
 # ---- WireGuard gateway --------------------------------------------------
 
-# UDP endpoint the client will connect to. For local Docker testing this is
-# your host's IP (e.g. "192.168.1.42:51820"); for production it's your
-# gateway's public hostname.
-wg_endpoint: "127.0.0.1:51820"
+# UDP endpoint the client will dial. Must be reachable from every user's
+# machine — a public hostname + port, or an IP for private/VPN access.
+wg_endpoint: "gateway.example.com:51820"
 
-# Interface name + address space the gateway exposes to peers.
+# Interface name + address space exposed to peers. The gateway always
+# owns the first host IP in this range (.1); each user is allocated the
+# next free IP on first WG config download.
 wg_interface: "wg0"
 wg_network: "10.77.0.0/24"
 wg_listen_port: 51820
 
-# Filename of downloaded configs → "<name>.conf". Also becomes the wg-quick
-# interface name on the client, so must be ≤ 15 chars and [a-z0-9-]. If
-# unset, derived from the first label of wg_endpoint ("gateway.example.com"
-# → "gateway"; an IP → literal "gateway").
-# wg_config_name: "wepublish-gw"
+# Filename of downloaded configs -> "<name>.conf". Also becomes the
+# wg-quick interface name, so must be <= 15 chars and match [a-z0-9-].
+# If unset, derived from the first label of wg_endpoint.
+# wg_config_name: "example-gw"
 
-# Network interface used for egress to the real services. Inside the Docker
-# container this is typically eth0.
+# Network interface used for egress to the real services. Inside Docker
+# this is usually eth0.
 egress_interface: "eth0"
 
-# Directory that persists server keys + per-user WG identity assignments.
+# Directory that persists the server's WG keypair and per-user peer
+# assignments. BACK THIS UP — losing it invalidates every handed-out
+# client config.
 state_dir: "state"
 
-# Optional DNS pushed to clients. Comment out to leave the client's DNS alone
-# (recommended for selective tunneling — you want only service traffic in the
-# tunnel, not DNS).
+# Optional DNS pushed to clients. Comment out to leave the client's DNS
+# alone (recommended: only service traffic should go through the tunnel,
+# including DNS would leak lookups).
 # wg_client_dns: "1.1.1.1"
 
 # Set false for non-root local development (skips `ip` / `wg` / `iptables`
-# calls so the web UI still boots). Must be true in the Docker container.
+# calls so the web UI still boots). Must be true inside the Docker image.
 enable_netfilter: true
 
 # ---- Users --------------------------------------------------------------
+#
+# Accounts that sign in with username + password. Leave `users` empty and
+# rely entirely on GitHub OAuth if you prefer — the login form hides the
+# password fields when no users are defined.
+#
+# Generate a password hash with:   python hash_password.py
+# Paste the output of the command as the value of `password_hash`.
 
-users:
-  admin:
-    password_hash: "$2b$12$34SQxalxN24WEkcqtIDH8.Lf4me3F9L/gTtX1gh/UNRQWnD81MrIC"  # "admin"
+users: {}
+# users:
+#   yourname:
+#     password_hash: "REPLACE_ME_WITH_BCRYPT_HASH"
 
 # Usernames in this list can see the audit log, see every user who has a
-# WG config, and revoke other users' configs. All other users only see
-# their own dashboard.
-admins:
-  - admin
+# WG config, revoke configs, kick individual grants, block services per
+# user, and lock users out entirely. Everyone else only sees their own
+# dashboard. Admin status can also come from a GitHub team (see below).
+admins: []
+# admins:
+#   - yourname
 
 # ---- GitHub OAuth (optional) -------------------------------------------
 #
 # When enabled, the login page shows a "Sign in with GitHub" button. After
-# the OAuth dance, the user is only allowed in if they are an active member
+# the OAuth dance, a user is only allowed in if they are an active member
 # of `required_team` inside `required_org` (or `required_org` if no team
-# is set). Membership is re-checked on every login, never cached.
+# is set). Team membership is re-checked periodically; if they're removed
+# from the team the session is revoked on the next check.
 #
-# Register an OAuth App at https://github.com/settings/developers with the
-# callback URL https://<your-gateway-hostname>/oauth/github/callback and
-# paste the client_id / client_secret below.
+# Register an OAuth App at https://github.com/settings/developers (or
+# https://github.com/organizations/<ORG>/settings/applications for
+# org-owned apps) with the callback URL
+#     https://<your-gateway-hostname>/oauth/github/callback
+# and paste the client_id + client_secret below.
 
 # oauth:
 #   github:
-#     client_id: "Iv1.xxxxxxxxxxxxxxxx"
-#     client_secret: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-#     required_org: "wepublish"
-#     required_team: "infrastructure"   # team slug; omit to check org only
-#     admin_team: "gateway-admins"      # optional: members of this team
-#                                       #   are granted admin in the UI
-#     reverify_interval: 300            # seconds — re-check team membership
-#                                       #   this often; kicks the user out
-#                                       #   if they've been removed
+#     client_id: "REPLACE_ME"
+#     client_secret: "REPLACE_ME"
+#     required_org: "your-org"
+#     required_team: "your-team-slug"   # omit to check org membership only
+#     admin_team: "your-admin-team"     # optional: members get admin in UI
+#     reverify_interval: 300            # seconds between membership re-checks
 
 # ---- Services -----------------------------------------------------------
 #
-# Each service's `hostname` is resolved at startup (and refreshed every
-# 5 minutes). Activating a service installs an iptables FORWARD rule scoped
-# to the user's WG IP and the service's resolved IPs + optional port.
+# Each entry is a destination reachable through the tunnel once activated.
+# `hostname` is resolved at startup (and refreshed every 5 minutes); the
+# resolved IP(s) go into the user's WG `AllowedIPs` and into the gateway's
+# iptables FORWARD rule.
 #
-# Use `cidrs` to pin explicit IPs (no DNS) or to add static ranges.
-# `protocol` defaults to tcp; `port` is optional (omit to allow any port).
+# Optional fields:
+#   cidrs:     [ "1.2.3.0/24" ]   pin explicit IPs (skip DNS for these)
+#   port:      443                 restrict to one port; omit for any
+#   protocol:  "tcp"               defaults to tcp
 
-# Omit `port:` to allow any TCP port to the resolved IP (simpler for local
-# testing). In production, pin it — e.g. `port: 22` / `443` / `5432`.
 services:
-  - name: ssh
-    hostname: "ssh.wepublish.cloud"
+  - name: example-ssh
+    hostname: "ssh.internal.example.com"
+    port: 22
 
-  - name: openshift-console
-    hostname: "console-openshift-console.apps.os.wepublish.cloud"
+  - name: example-web
+    hostname: "console.internal.example.com"
+    port: 443
 
-  - name: postgres01
-    hostname: "postgres01.wepublish.cloud"
+  - name: example-db
+    hostname: "db.internal.example.com"
+    port: 5432
