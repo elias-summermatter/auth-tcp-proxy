@@ -17,12 +17,14 @@ from flask_limiter.util import get_remote_address
 
 from audit import AuditLog
 from gateway import Gateway
+from webhooks import FORWARD_HEADERS, WebhookRegistry, verify_github_signature
 
 GITHUB_AUTHORIZE = "https://github.com/login/oauth/authorize"
 GITHUB_TOKEN = "https://github.com/login/oauth/access_token"
 GITHUB_API = "https://api.github.com"
 
 SESSION_MAX_AGE_SECONDS = 24 * 3600
+MAX_WEBHOOK_BODY = 1 * 1024 * 1024  # 1 MiB cap on incoming webhook bodies
 
 # Disallow every crawler we can name, then a catch-all wildcard. Some bots
 # only honour their own explicit name in robots.txt so the named entries
@@ -155,6 +157,13 @@ def create_app(config: dict) -> Flask:
     gateway.start()
     app.config["gateway"] = gateway
     app.config["audit"] = audit
+
+    from pathlib import Path as _Path
+    webhook_registry = WebhookRegistry(
+        config.get("webhooks") or [],
+        state_path=_Path(config.get("state_dir", "state")) / "webhooks_state.json",
+    )
+    app.config["webhooks"] = webhook_registry
 
     def login_required(f):
         @wraps(f)
@@ -327,6 +336,104 @@ def create_app(config: dict) -> Flask:
     @app.route("/robots.txt")
     def robots_txt():
         return Response(ROBOTS_TXT, mimetype="text/plain")
+
+    @app.route("/hook/<path>", methods=["POST"])
+    @limiter.limit("120 per minute")
+    def webhook_passthrough(path: str):
+        """Forward a signed webhook delivery to an internal target.
+
+        Behaviour:
+        - Unknown path → 404 (no hint that other paths might exist).
+        - If the webhook has an HMAC secret configured, verify
+          X-Hub-Signature-256 before forwarding. Mismatch → 403.
+        - Body cap: 1 MiB. Oversized → 413.
+        - Upstream timeout: per-webhook (default 15 s). Unreachable
+          upstream → 502 so GitHub retries per its standard policy.
+        - Response body + status is proxied back to the caller by default
+          (GitHub shows it in the deliveries UI); webhook.return_response
+          = false replaces it with a minimal 200.
+        """
+        wh = webhook_registry.find(path)
+        if wh is None:
+            abort(404)
+        src = request.remote_addr
+        if not wh.enabled:
+            # Admin toggled this webhook off. Acknowledge with 200 so the
+            # sender doesn't retry forever; record the attempt so admins
+            # notice incoming deliveries to a disabled webhook.
+            audit.record("webhook_suppressed", ip=src, webhook=wh.name)
+            return ("", 200)
+        body = request.get_data(cache=False)
+        if len(body) > MAX_WEBHOOK_BODY:
+            webhook_registry.record_failure(wh, "body too large")
+            audit.record("webhook_failed", ip=src, webhook=wh.name,
+                         reason="body too large")
+            abort(413)
+        if wh.github_hmac_secret:
+            sig = request.headers.get("X-Hub-Signature-256")
+            if not verify_github_signature(sig, body, wh.github_hmac_secret):
+                webhook_registry.record_failure(wh, "signature mismatch")
+                audit.record("webhook_failed", ip=src, webhook=wh.name,
+                             reason="signature mismatch")
+                abort(403)
+        headers = {k: v for k, v in request.headers.items() if k in FORWARD_HEADERS}
+        try:
+            upstream = requests.post(wh.target, data=body, headers=headers,
+                                     timeout=wh.timeout, allow_redirects=False)
+        except requests.RequestException as e:
+            reason = f"upstream {type(e).__name__}"
+            webhook_registry.record_failure(wh, reason)
+            audit.record("webhook_failed", ip=src, webhook=wh.name,
+                         reason=reason)
+            return jsonify({"error": "upstream unreachable"}), 502
+        webhook_registry.record_success(wh, upstream.status_code)
+        audit.record("webhook_forwarded", ip=src, webhook=wh.name,
+                     status=upstream.status_code, bytes_in=len(body))
+        if not wh.return_response:
+            return ("", 200)
+        content_type = upstream.headers.get("Content-Type", "application/octet-stream")
+        return Response(upstream.content, status=upstream.status_code,
+                        content_type=content_type)
+
+    @app.route("/api/webhooks")
+    @admin_required
+    def api_webhooks():
+        out = []
+        for wh in webhook_registry.all():
+            s = wh.stats
+            out.append({
+                "name": wh.name,
+                "path": wh.path,  # full secret — admins only (same as config.yaml)
+                "target": wh.target,
+                "has_hmac": bool(wh.github_hmac_secret),
+                "return_response": wh.return_response,
+                "enabled": wh.enabled,
+                "total": s.total,
+                "successes": s.successes,
+                "failures": s.failures,
+                "last_forwarded_at": s.last_forwarded_at,
+                "last_upstream_status": s.last_upstream_status,
+                "last_error": s.last_error,
+            })
+        return jsonify({"webhooks": out})
+
+    @app.route("/api/admin/webhook/<name>/enable", methods=["POST"])
+    @admin_required
+    def api_webhook_enable(name: str):
+        if not webhook_registry.set_enabled(name, True):
+            return jsonify({"error": "unknown webhook"}), 404
+        audit.record("webhook_enabled", user=session["user"],
+                     ip=request.remote_addr, webhook=name)
+        return jsonify({"ok": True})
+
+    @app.route("/api/admin/webhook/<name>/disable", methods=["POST"])
+    @admin_required
+    def api_webhook_disable(name: str):
+        if not webhook_registry.set_enabled(name, False):
+            return jsonify({"error": "unknown webhook"}), 404
+        audit.record("webhook_disabled", user=session["user"],
+                     ip=request.remote_addr, webhook=name)
+        return jsonify({"ok": True})
 
     @app.route("/login", methods=["GET", "POST"])
     @limiter.limit("10 per minute; 50 per hour", methods=["POST"])

@@ -261,6 +261,24 @@
 
   {% if is_admin %}
 
+  <h2>Webhooks</h2>
+  <table class="webhooks-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Target</th>
+        <th>HMAC</th>
+        <th>Deliveries</th>
+        <th>Last forwarded</th>
+        <th>Last status</th>
+        <th style="text-align:right">Actions</th>
+      </tr>
+    </thead>
+    <tbody id="webhooks-rows">
+      <tr><td colspan="7" style="color:#6c7086;text-align:center;padding:1rem">loading…</td></tr>
+    </tbody>
+  </table>
+
   <h2>Users</h2>
   <table class="users-table">
     <thead>
@@ -286,6 +304,7 @@
       <option value="auth">auth (login/logout)</option>
       <option value="grant">grants (activate/extend/deactivate)</option>
       <option value="health">service health</option>
+      <option value="webhook">webhook passthrough</option>
       <option value="error">errors</option>
     </select>
     <select id="f-service">
@@ -540,6 +559,7 @@ function renderMeshPeers() {
 // --- users panel (admin only) ------------------------------------------
 
 let usersList = [];
+let webhooksList = [];
 const ALL_SERVICES = [{% for svc in services %}{{ svc.name | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}];
 const APPROVAL_REQUIRED = new Set({{ services | selectattr('requires_approval') | map(attribute='name') | list | tojson }});
 
@@ -553,6 +573,58 @@ async function refreshUsers() {
     usersList = data.users || [];
     renderUsers();
   } catch (e) { /* ignore */ }
+}
+
+async function refreshWebhooks() {
+  if (!isAdmin) return;
+  try {
+    const r = await fetch('/api/webhooks', { credentials: 'same-origin' });
+    if (r.status === 401) { window.location = '/login'; return; }
+    if (r.status === 403) return;
+    const data = await r.json();
+    webhooksList = data.webhooks || [];
+    renderWebhooks();
+  } catch (e) { /* ignore */ }
+}
+
+function renderWebhooks() {
+  const tbody = document.getElementById('webhooks-rows');
+  if (!tbody) return;
+  if (!webhooksList.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="color:#6c7086;text-align:center;padding:1rem">no webhooks configured</td></tr>';
+    return;
+  }
+  tbody.innerHTML = webhooksList.map(wh => {
+    const lastTime = wh.last_forwarded_at
+      ? fmtInstant(new Date(wh.last_forwarded_at * 1000))
+      : '<span style="color:#6c7086">never</span>';
+    const deliveries = `${wh.total} total (<span style="color:#a6e3a1">${wh.successes}</span> / <span style="color:#f38ba8">${wh.failures}</span>)`;
+    const lastStatus = wh.last_upstream_status
+      ? `<span class="ip">${wh.last_upstream_status}</span>`
+      : '<span style="color:#6c7086">—</span>';
+    const errorLine = wh.last_error
+      ? `<div style="color:#f38ba8;font-size:0.8rem;margin-top:0.2rem">${escapeHtml(wh.last_error)}</div>`
+      : '';
+    const hmacChip = wh.has_hmac
+      ? '<span class="chip chip-active" title="X-Hub-Signature-256 verified at the gateway">verified</span>'
+      : '<span class="chip chip-blocked" title="Gateway does not verify the signature — target must validate it">not verified</span>';
+    const fullUrl = window.location.origin + '/hook/' + wh.path;
+    const toggleBtn = wh.enabled
+      ? `<button class="btn-danger" data-webhook-disable="${escapeHtml(wh.name)}" title="Stop forwarding deliveries. Incoming requests are acknowledged with 200 but dropped.">Disable</button>`
+      : `<button class="btn-primary" data-webhook-enable="${escapeHtml(wh.name)}" title="Resume forwarding deliveries to the target">Enable</button>`;
+    const nameCell = wh.enabled
+      ? `<strong>${escapeHtml(wh.name)}</strong>`
+      : `<strong>${escapeHtml(wh.name)}</strong> <span class="chip chip-blocked" title="Deliveries are being dropped. Click Enable to resume.">disabled</span>`;
+    return `<tr class="${wh.enabled ? '' : 'self-row'}">
+      <td>${nameCell}</td>
+      <td class="target" style="word-break:break-all">${escapeHtml(wh.target)}</td>
+      <td>${hmacChip}</td>
+      <td style="font-family:ui-monospace,monospace;font-size:0.85rem">${deliveries}</td>
+      <td style="font-family:ui-monospace,monospace;font-size:0.85rem">${lastTime}</td>
+      <td>${lastStatus}${errorLine}</td>
+      <td style="text-align:right"><div class="btn-group">${toggleBtn} <button class="btn-secondary" data-copy-webhook="${escapeHtml(fullUrl)}" title="Copy full URL to clipboard">Copy URL</button></div></td>
+    </tr>`;
+  }).join('');
 }
 
 function renderUsers() {
@@ -717,6 +789,41 @@ document.addEventListener('click', async (ev) => {
     } finally { refreshUsers(); refreshAudit(true); }
     return;
   }
+  const whDisable = ev.target.closest('button[data-webhook-disable]');
+  if (whDisable) {
+    whDisable.disabled = true;
+    const name = whDisable.dataset.webhookDisable;
+    try {
+      await postAdmin(`/api/admin/webhook/${encodeURIComponent(name)}/disable`, {
+        confirmMsg: `Disable the "${name}" webhook? Incoming deliveries will be silently dropped until you re-enable it.`,
+      });
+    } finally { refreshWebhooks(); refreshAudit(true); }
+    return;
+  }
+  const whEnable = ev.target.closest('button[data-webhook-enable]');
+  if (whEnable) {
+    whEnable.disabled = true;
+    const name = whEnable.dataset.webhookEnable;
+    try {
+      await postAdmin(`/api/admin/webhook/${encodeURIComponent(name)}/enable`);
+    } finally { refreshWebhooks(); refreshAudit(true); }
+    return;
+  }
+  const copyWebhook = ev.target.closest('button[data-copy-webhook]');
+  if (copyWebhook) {
+    const url = copyWebhook.dataset.copyWebhook;
+    try {
+      await navigator.clipboard.writeText(url);
+      const orig = copyWebhook.textContent;
+      copyWebhook.textContent = 'Copied!';
+      setTimeout(() => { copyWebhook.textContent = orig; }, 1500);
+    } catch (e) {
+      // Clipboard API may be blocked outside a secure context; fall back
+      // to a prompt so the admin can at least copy manually.
+      window.prompt('Copy the full webhook URL:', url);
+    }
+    return;
+  }
 });
 
 function tickUsersCountdowns() {
@@ -781,6 +888,9 @@ function fmtAuditDetail(e) {
   if (e.reason) parts.push(`reason: ${e.reason}`);
   if (e.via) parts.push(`via: ${e.via}`);
   if (e.target_user) parts.push(`target: ${e.target_user}`);
+  if (e.webhook) parts.push(`webhook: ${e.webhook}`);
+  if (e.status) parts.push(`status: ${e.status}`);
+  if (e.bytes_in != null) parts.push(`bytes: ${e.bytes_in}`);
   if (e.wg_ip) parts.push(`wg: ${e.wg_ip}`);
   if (e.admin_via_team) parts.push('admin-via-team');
   if (e.error) parts.push(`error: ${e.error}`);
@@ -861,6 +971,7 @@ refresh();
 if (isAdmin) {
   refreshUsers();
   refreshAudit(true);
+  refreshWebhooks();
 }
 setInterval(render, 1000);
 setInterval(refresh, 10000);
@@ -871,6 +982,7 @@ if (isAdmin) {
   setInterval(tickUsersCountdowns, 1000);
   setInterval(refreshUsers, 10000);
   setInterval(() => { if (auditOffset === 0) refreshAudit(false); }, 5000);
+  setInterval(refreshWebhooks, 15000);
 }
 </script>
 </body>

@@ -66,6 +66,43 @@ shared_network:
   name: "shared-network"          # service name shown on the dashboard
   requires_approval: false        # set true to gate per user via admin approval
 
+# ---- Webhook passthrough (optional) ------------------------------------
+#
+# Forwards POST requests from the public internet (GitHub / GitLab / etc.)
+# to internal targets through the gateway — so things like "a Git host
+# pushes a webhook into an internal CI/CD system" work without exposing
+# that system to the public internet.
+#
+# Each entry adds an endpoint at
+#     https://<gateway-hostname>/hook/<path>
+# The `path` acts as a shared secret; it's compared in constant time so
+# valid paths can't be enumerated via response timing. Bodies are capped
+# at 1 MiB, upstream timeout is 15 s by default, and only a small
+# whitelist of request headers is forwarded (no Authorization / Cookie
+# leakage to the target).
+#
+# Optional `github_hmac_secret`: if set, the gateway verifies GitHub's
+# X-Hub-Signature-256 before forwarding. Useful if the target doesn't
+# validate signatures itself. Can be skipped when the target already
+# validates (most mature CI/CD systems do, when you configure a webhook
+# secret in their UI).
+#
+# Admins can toggle each webhook on/off from the dashboard without
+# editing this file — toggles persist across restarts via
+# state/webhooks_state.json. Default is enabled.
+
+# webhooks:
+#   - name: ci
+#     path: "REPLACE_WITH_64+_CHARS_OF_RANDOM"        # e.g. `openssl rand -hex 32`
+#     target: "https://ci.internal.example.com/api/webhook"
+#     # github_hmac_secret: "..."   # optional; skip if target validates
+#     # timeout: 15                  # seconds; upstream request timeout
+#     # return_response: true        # false = return a minimal 200 regardless of upstream
+#
+#   - name: build-trigger
+#     path: "..."
+#     target: "https://build.internal.example.com/api/hooks/..."
+
 # ---- WireGuard gateway --------------------------------------------------
 
 # UDP endpoint the client will dial. Must be reachable from every user's

@@ -256,6 +256,67 @@ service entirely. Existing grants tear down on next restart. You can
 also set `requires_approval: true` to gate it per user via the existing
 admin approval flow.
 
+## Webhook passthrough
+
+Some integrations need the public internet to reach internal services —
+the canonical example being "a Git host (GitHub, GitLab, etc.) pushes a
+webhook to a CI/CD or deploy system so it knows when to sync." You'd
+rather not expose that internal system to the internet just for one
+POST endpoint.
+
+The gateway can forward POST requests from `/hook/<secret-path>` to an
+internal target, so the Git host talks to `gateway.example.com` (the
+only public hostname you expose) and the gateway relays the payload to
+`ci.internal.example.com/api/webhook`.
+
+**How it works:**
+
+1. Add a webhook entry to `config.yaml` with a long random `path` and
+   the internal `target` URL.
+2. Configure the webhook in GitHub/GitLab pointing at
+   `https://<your-gateway>/hook/<that-path>`.
+3. Incoming POSTs are matched against configured paths in constant time
+   (so valid paths can't be enumerated by timing) and forwarded with a
+   tight header whitelist (no Authorization / cookies propagate).
+4. Optionally, set `github_hmac_secret` on the webhook to have the
+   gateway verify GitHub's `X-Hub-Signature-256` before forwarding —
+   useful if the target doesn't validate signatures itself. Skip it
+   when the target already validates (many CI/CD systems do, when you
+   configure a webhook secret in their UI).
+
+**Security properties:**
+
+- Body capped at 1 MiB, upstream timeout 15 s.
+- Rate limiter sits in front (120 deliveries/min/IP).
+- If upstream is unreachable, returns 502 so the sender retries per its
+  normal backoff (GitHub does this automatically).
+- `return_response: false` on a webhook returns a minimal 200 to the
+  caller regardless of what the upstream said — hides target details
+  from GitHub's deliveries page if that matters to you. Default is to
+  pass the real response through for debuggability.
+- Every delivery is audited: `webhook_forwarded` on success,
+  `webhook_failed` on errors, `webhook_suppressed` when the admin has
+  disabled the webhook.
+
+**Admin controls:**
+
+The dashboard's Webhooks panel (admin-only) shows each configured
+webhook with:
+
+- Name, target URL, HMAC-verified indicator
+- Delivery counters (total / ok / fail)
+- Last-forwarded timestamp (in your configured timezone)
+- Last upstream status + error message, if any
+- **Disable/Enable button** — stops forwarding without editing
+  `config.yaml`. Disabled webhooks acknowledge deliveries with 200
+  (so senders don't retry forever) but drop the payload.
+- **Copy URL button** — copies the full `https://...<path>` to your
+  clipboard for pasting into GitHub.
+
+The enable/disable state persists across restarts via
+`state/webhooks_state.json`. A restart does NOT silently re-enable
+something an admin deliberately turned off.
+
 ## Service health chips
 
 Every service row on the dashboard now carries two coloured tags driven
@@ -523,7 +584,9 @@ Events you'll see: `login`, `login_failed`, `logout`, `session_revoked`,
 `deactivate`, `grant_expired`, `user_revoked`, `admin_deactivate`,
 `service_blocked`, `service_unblocked`, `service_approved`,
 `service_approval_revoked`, `user_locked`, `user_unlocked`,
-`user_deleted`, `service_health_ok`, `service_health_fail`.
+`user_deleted`, `service_health_ok`, `service_health_fail`,
+`webhook_forwarded`, `webhook_failed`, `webhook_suppressed`,
+`webhook_enabled`, `webhook_disabled`.
 
 Rotation: every Monday 00:00 UTC (configurable) the live file is renamed
 to `audit-YYYY-MM-DD.log.gz`, gzipped, and a new live file starts.
