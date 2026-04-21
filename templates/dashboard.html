@@ -261,23 +261,24 @@
 
   {% if is_admin %}
 
-  <h2>Webhooks</h2>
-  <table class="webhooks-table">
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Target</th>
-        <th>HMAC</th>
-        <th>Deliveries</th>
-        <th>Last forwarded</th>
-        <th>Last status</th>
-        <th style="text-align:right">Actions</th>
-      </tr>
-    </thead>
-    <tbody id="webhooks-rows">
-      <tr><td colspan="7" style="color:#6c7086;text-align:center;padding:1rem">loading…</td></tr>
-    </tbody>
-  </table>
+  <div id="webhooks-section" hidden>
+    <h2>Webhooks</h2>
+    <table class="webhooks-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Target</th>
+          <th>Methods</th>
+          <th>HMAC</th>
+          <th>Deliveries</th>
+          <th>Last forwarded</th>
+          <th>Last status</th>
+          <th style="text-align:right">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="webhooks-rows"></tbody>
+    </table>
+  </div>
 
   <h2>Users</h2>
   <table class="users-table">
@@ -588,12 +589,17 @@ async function refreshWebhooks() {
 }
 
 function renderWebhooks() {
+  const section = document.getElementById('webhooks-section');
   const tbody = document.getElementById('webhooks-rows');
-  if (!tbody) return;
+  if (!section || !tbody) return;
+  // Hide the whole Webhooks section when no webhooks are configured —
+  // no heading, no empty table, nothing to clutter the admin view.
   if (!webhooksList.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="color:#6c7086;text-align:center;padding:1rem">no webhooks configured</td></tr>';
+    section.hidden = true;
+    tbody.innerHTML = '';
     return;
   }
+  section.hidden = false;
   tbody.innerHTML = webhooksList.map(wh => {
     const lastTime = wh.last_forwarded_at
       ? fmtInstant(new Date(wh.last_forwarded_at * 1000))
@@ -608,6 +614,9 @@ function renderWebhooks() {
     const hmacChip = wh.has_hmac
       ? '<span class="chip chip-active" title="X-Hub-Signature-256 verified at the gateway">verified</span>'
       : '<span class="chip chip-blocked" title="Gateway does not verify the signature — target must validate it">not verified</span>';
+    const methodsCell = Array.isArray(wh.methods) && wh.methods.length
+      ? wh.methods.map(m => `<span class="chip chip-approved" style="margin:0 0.2rem 0.2rem 0" title="HTTP method accepted on this webhook">${escapeHtml(m)}</span>`).join('')
+      : '<span class="no-entry">—</span>';
     const fullUrl = window.location.origin + '/hook/' + wh.path;
     const toggleBtn = wh.enabled
       ? `<button class="btn-danger" data-webhook-disable="${escapeHtml(wh.name)}" title="Stop forwarding deliveries. Incoming requests are acknowledged with 200 but dropped.">Disable</button>`
@@ -618,6 +627,7 @@ function renderWebhooks() {
     return `<tr class="${wh.enabled ? '' : 'self-row'}">
       <td>${nameCell}</td>
       <td class="target" style="word-break:break-all">${escapeHtml(wh.target)}</td>
+      <td>${methodsCell}</td>
       <td>${hmacChip}</td>
       <td style="font-family:ui-monospace,monospace;font-size:0.85rem">${deliveries}</td>
       <td style="font-family:ui-monospace,monospace;font-size:0.85rem">${lastTime}</td>
@@ -889,6 +899,7 @@ function fmtAuditDetail(e) {
   if (e.via) parts.push(`via: ${e.via}`);
   if (e.target_user) parts.push(`target: ${e.target_user}`);
   if (e.webhook) parts.push(`webhook: ${e.webhook}`);
+  if (e.method) parts.push(`method: ${e.method}`);
   if (e.status) parts.push(`status: ${e.status}`);
   if (e.bytes_in != null) parts.push(`bytes: ${e.bytes_in}`);
   if (e.wg_ip) parts.push(`wg: ${e.wg_ip}`);

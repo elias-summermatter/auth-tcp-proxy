@@ -264,10 +264,11 @@ webhook to a CI/CD or deploy system so it knows when to sync." You'd
 rather not expose that internal system to the internet just for one
 POST endpoint.
 
-The gateway can forward POST requests from `/hook/<secret-path>` to an
-internal target, so the Git host talks to `gateway.example.com` (the
-only public hostname you expose) and the gateway relays the payload to
-`ci.internal.example.com/api/webhook`.
+The gateway can forward HTTP requests (POST by default; GET/PUT/PATCH/
+DELETE on request) from `/hook/<secret-path>` to an internal target, so
+the Git host (or any other caller) talks to `gateway.example.com` —
+the only public hostname you expose — and the gateway relays the
+request to `ci.internal.example.com/api/webhook`.
 
 **How it works:**
 
@@ -579,6 +580,9 @@ Admin endpoints:
 | `POST /api/admin/revoke-approval/<u>/<svc>` | Revoke that approval + drop any active grant |
 | `POST /api/admin/lock/<u>`               | Block every service in one click    |
 | `POST /api/admin/unlock/<u>`             | Clear all blocks                    |
+| `GET /api/webhooks`                      | List configured webhooks + stats (full secret paths; admins only). |
+| `POST /api/admin/webhook/<name>/enable`  | Resume forwarding deliveries for a webhook. |
+| `POST /api/admin/webhook/<name>/disable` | Silently drop deliveries (200 to sender, no forward). Persists across restart. |
 | `GET /api/audit?...`                     | Filter + paginate the audit log    |
 | `GET /api/users`                         | Admin dashboard data feed           |
 

@@ -442,6 +442,7 @@ def create_app(config: dict) -> Flask:
                 "name": wh.name,
                 "path": wh.path,  # full secret — admins only (same as config.yaml)
                 "target": wh.target,
+                "methods": list(wh.methods),
                 "has_hmac": bool(wh.github_hmac_secret),
                 "return_response": wh.return_response,
                 "enabled": wh.enabled,
