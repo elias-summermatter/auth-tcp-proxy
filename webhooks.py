@@ -71,6 +71,10 @@ class Webhook:
     # acknowledged with 200 and NOT forwarded. Persisted across restarts so
     # a restart doesn't re-enable something an admin deliberately disabled.
     enabled: bool = True
+    # Allowed HTTP methods. Defaults to POST (covers 99% of webhooks);
+    # expand for GET-style ping integrations, PUT/PATCH-based APIs, etc.
+    # Methods not in this list get a 405.
+    methods: list[str] = field(default_factory=lambda: ["POST"])
     stats: WebhookStats = field(default_factory=WebhookStats)
 
 
@@ -95,6 +99,7 @@ class WebhookRegistry:
                 github_hmac_secret=c.get("github_hmac_secret") or None,
                 timeout=int(c.get("timeout", 15)),
                 return_response=bool(c.get("return_response", True)),
+                methods=[m.upper() for m in (c.get("methods") or ["POST"])],
             ))
         self._lock = threading.Lock()
         self._state_path = state_path

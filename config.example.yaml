@@ -82,10 +82,12 @@ shared_network:
 # leakage to the target).
 #
 # Optional `github_hmac_secret`: if set, the gateway verifies GitHub's
-# X-Hub-Signature-256 before forwarding. Useful if the target doesn't
-# validate signatures itself. Can be skipped when the target already
-# validates (most mature CI/CD systems do, when you configure a webhook
-# secret in their UI).
+# X-Hub-Signature-256 before forwarding. RECOMMENDED TO LEAVE UNSET when
+# the target already validates (most mature CI/CD systems do — configure
+# the webhook secret in the target's UI instead). Keeping the HMAC only
+# on the target means a gateway compromise cannot forge signatures that
+# would pass the target's check; the secret simply isn't there to steal.
+# Only set this when the target cannot validate signatures itself.
 #
 # Admins can toggle each webhook on/off from the dashboard without
 # editing this file — toggles persist across restarts via
@@ -95,13 +97,15 @@ shared_network:
 #   - name: ci
 #     path: "REPLACE_WITH_64+_CHARS_OF_RANDOM"        # e.g. `openssl rand -hex 32`
 #     target: "https://ci.internal.example.com/api/webhook"
+#     # methods: ["POST"]           # default; add "GET", "PUT", etc. if the target expects them
 #     # github_hmac_secret: "..."   # optional; skip if target validates
 #     # timeout: 15                  # seconds; upstream request timeout
 #     # return_response: true        # false = return a minimal 200 regardless of upstream
 #
-#   - name: build-trigger
+#   - name: simple-trigger
 #     path: "..."
-#     target: "https://build.internal.example.com/api/hooks/..."
+#     target: "https://trigger.internal.example.com/ping"
+#     methods: ["GET"]              # example of a GET-style webhook
 
 # ---- WireGuard gateway --------------------------------------------------
 

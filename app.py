@@ -337,45 +337,67 @@ def create_app(config: dict) -> Flask:
     def robots_txt():
         return Response(ROBOTS_TXT, mimetype="text/plain")
 
-    @app.route("/hook/<path>", methods=["POST"])
+    @app.route("/hook/<path>", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     @limiter.limit("120 per minute")
     def webhook_passthrough(path: str):
-        """Forward a signed webhook delivery to an internal target.
+        """Forward a webhook delivery to an internal target.
 
         Behaviour:
-        - Unknown path → 404 (no hint that other paths might exist).
-        - If the webhook has an HMAC secret configured, verify
-          X-Hub-Signature-256 before forwarding. Mismatch → 403.
-        - Body cap: 1 MiB. Oversized → 413.
+        - Every rejection returns 404 — unknown path, wrong method,
+          bad HMAC, oversized body. All indistinguishable from outside
+          so the set of valid paths cannot be enumerated.
+        - If the webhook has an HMAC secret configured AND the request
+          carries a body (POST/PUT/PATCH), X-Hub-Signature-256 is
+          verified before forwarding. Body-less methods (GET, DELETE)
+          skip HMAC because there's no payload to sign.
+        - Body cap: 1 MiB.
         - Upstream timeout: per-webhook (default 15 s). Unreachable
-          upstream → 502 so GitHub retries per its standard policy.
+          upstream → 502 so the sender retries per its standard policy.
+          (502 does reveal the path exists, but only at the moment the
+          upstream is legitimately down — attacker still needs the
+          secret path to reach this state.)
         - Response body + status is proxied back to the caller by default
           (GitHub shows it in the deliveries UI); webhook.return_response
           = false replaces it with a minimal 200.
+        - Query-string parameters are forwarded verbatim to the target,
+          so GET-style webhooks (ping/trigger URLs) work too.
         """
+        # Stealth: every rejection that *could* leak "this path exists"
+        # collapses to 404 — identical to the "no such path" response.
+        # An attacker cannot distinguish unknown path, wrong method, bad
+        # HMAC, or oversized body from outside. Real failures are still
+        # recorded in the audit log for admins.
         wh = webhook_registry.find(path)
         if wh is None:
             abort(404)
         src = request.remote_addr
+        method = request.method.upper()
+        if method not in wh.methods:
+            audit.record("webhook_failed", ip=src, webhook=wh.name,
+                         reason=f"method {method} not allowed")
+            abort(404)
         if not wh.enabled:
             # Admin toggled this webhook off. Acknowledge with 200 so the
             # sender doesn't retry forever; record the attempt so admins
             # notice incoming deliveries to a disabled webhook.
-            audit.record("webhook_suppressed", ip=src, webhook=wh.name)
+            audit.record("webhook_suppressed", ip=src, webhook=wh.name,
+                         method=method)
             return ("", 200)
         body = request.get_data(cache=False)
         if len(body) > MAX_WEBHOOK_BODY:
             webhook_registry.record_failure(wh, "body too large")
             audit.record("webhook_failed", ip=src, webhook=wh.name,
                          reason="body too large")
-            abort(413)
-        if wh.github_hmac_secret:
+            abort(404)
+        # HMAC protects the body. For body-less methods the signature
+        # header wouldn't be meaningful anyway, so skip the check.
+        if wh.github_hmac_secret and method in ("POST", "PUT", "PATCH"):
             sig = request.headers.get("X-Hub-Signature-256")
             if not verify_github_signature(sig, body, wh.github_hmac_secret):
                 webhook_registry.record_failure(wh, "signature mismatch")
                 audit.record("webhook_failed", ip=src, webhook=wh.name,
                              reason="signature mismatch")
-                abort(403)
+                abort(404)
         # request.headers.get() is case-insensitive (Werkzeug), so walk the
         # whitelist and pull values by canonical name — this handles GitHub
         # sending "X-Github-Event" vs our set entry "X-GitHub-Event".
@@ -385,8 +407,15 @@ def create_app(config: dict) -> Flask:
             if v is not None:
                 headers[canonical] = v
         try:
-            upstream = requests.post(wh.target, data=body, headers=headers,
-                                     timeout=wh.timeout, allow_redirects=False)
+            upstream = requests.request(
+                method=method,
+                url=wh.target,
+                params=request.args,
+                data=body if body else None,
+                headers=headers,
+                timeout=wh.timeout,
+                allow_redirects=False,
+            )
         except requests.RequestException as e:
             reason = f"upstream {type(e).__name__}"
             webhook_registry.record_failure(wh, reason)
@@ -395,7 +424,8 @@ def create_app(config: dict) -> Flask:
             return jsonify({"error": "upstream unreachable"}), 502
         webhook_registry.record_success(wh, upstream.status_code)
         audit.record("webhook_forwarded", ip=src, webhook=wh.name,
-                     status=upstream.status_code, bytes_in=len(body))
+                     method=method, status=upstream.status_code,
+                     bytes_in=len(body))
         if not wh.return_response:
             return ("", 200)
         content_type = upstream.headers.get("Content-Type", "application/octet-stream")

@@ -280,9 +280,12 @@ only public hostname you expose) and the gateway relays the payload to
    tight header whitelist (no Authorization / cookies propagate).
 4. Optionally, set `github_hmac_secret` on the webhook to have the
    gateway verify GitHub's `X-Hub-Signature-256` before forwarding —
-   useful if the target doesn't validate signatures itself. Skip it
-   when the target already validates (many CI/CD systems do, when you
-   configure a webhook secret in their UI).
+   only useful when the target cannot validate signatures itself.
+   **Leave it unset** when the target already validates (most mature
+   CI/CD systems do, when you configure a webhook secret in their UI).
+   This is slightly *more* secure: a gateway compromise cannot steal
+   and forge an HMAC secret that isn't stored there in the first place,
+   so forged deliveries would still fail the target's own check.
 
 **Security properties:**
 
@@ -294,6 +297,17 @@ only public hostname you expose) and the gateway relays the payload to
   caller regardless of what the upstream said — hides target details
   from GitHub's deliveries page if that matters to you. Default is to
   pass the real response through for debuggability.
+- **Non-enumerable.** Every rejection (unknown path, wrong method, bad
+  HMAC, oversized body) returns an identical 404. An attacker probing
+  `/hook/<guess>` cannot distinguish "this path doesn't exist" from
+  "this path exists but my request was rejected" — so valid paths
+  can't be discovered by response-code differences. Combined with
+  constant-time path matching, the 64-hex-char path space is
+  effectively impossible to brute-force.
+- **Multi-method.** `methods: ["POST"]` by default; configure `["GET"]`,
+  `["POST", "PUT"]`, etc. for targets that expect other verbs. GET-style
+  ping/trigger webhooks forward query strings verbatim. HMAC verification
+  only runs on body-carrying methods (POST/PUT/PATCH).
 - Every delivery is audited: `webhook_forwarded` on success,
   `webhook_failed` on errors, `webhook_suppressed` when the admin has
   disabled the webhook.
