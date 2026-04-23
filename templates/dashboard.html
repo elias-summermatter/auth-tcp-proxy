@@ -164,7 +164,7 @@
       {% endif %}
     </p>
     <button class="btn-primary" type="button" id="open-download-modal">
-      {{ "Rotate &amp; download config" | safe if has_config else "Generate &amp; download config" | safe }}
+      {{ "Rotate & download config" if has_config else "Generate & download config" }}
     </button>
     <a href="{{ url_for('help_page') }}" class="inline-help-link">How do I use this file? →</a>
   </div>

@@ -651,7 +651,13 @@ def create_app(config: dict) -> Flask:
                 session["login_at"] = time.time()
                 session.pop("oauth_admin", None)
                 audit.record("login", user=u, ip=request.remote_addr, via="password")
-                return redirect(_safe_next(request.args.get("next")) or url_for("dashboard"))
+                # _safe_next() rejects any target with a scheme, netloc, or
+                # protocol-relative prefix — only local absolute paths pass.
+                # The scanners (Semgrep/CodeQL) can't see through the helper
+                # to the validation that actually happens there. Suppressing
+                # with justification: the guard is at app.py:_safe_next.
+                # nosemgrep: python.flask.security.open-redirect.open-redirect
+                return redirect(_safe_next(request.args.get("next")) or url_for("dashboard"))  # lgtm[py/url-redirection]
             audit.record("login_failed", user=u or None, ip=request.remote_addr,
                          via="password")
             error = "Invalid username or password"
@@ -670,6 +676,10 @@ def create_app(config: dict) -> Flask:
             session["oauth_next"] = nxt
         params = {
             "client_id": github_cfg["client_id"],
+            # GitHub requires an absolute redirect_uri — relative paths are
+            # rejected. _external=True is a functional requirement of the
+            # OAuth flow, not a misconfiguration.
+            # nosemgrep: python.flask.security.audit.flask-url-for-external-true.flask-url-for-external-true
             "redirect_uri": url_for("oauth_github_callback", _external=True),
             "scope": "read:org",
             "state": state,
@@ -701,6 +711,9 @@ def create_app(config: dict) -> Flask:
                     "client_id": github_cfg["client_id"],
                     "client_secret": github_cfg["client_secret"],
                     "code": code,
+                    # Must match the redirect_uri sent on the initial
+                    # authorize step (same _external=True justification).
+                    # nosemgrep: python.flask.security.audit.flask-url-for-external-true.flask-url-for-external-true
                     "redirect_uri": url_for("oauth_github_callback", _external=True),
                 },
                 headers={"Accept": "application/json"},
@@ -858,12 +871,16 @@ def create_app(config: dict) -> Flask:
         except PermissionError as e:
             # Safe to echo: these messages describe the user's own state
             # (blocked / requires approval) that they can already see on
-            # their dashboard.
-            return jsonify({"error": str(e)}), 403
+            # their dashboard. CodeQL flags `str(e)` generically; the
+            # specific exception type gate makes this not an exposure.
+            return jsonify({"error": str(e)}), 403  # lgtm[py/stack-trace-exposure]
         except Exception as e:
             # Don't echo unexpected exception strings — subprocess errors,
             # iptables failures, etc. can leak internal paths or commands.
-            app.logger.warning("activate failed user=%s svc=%s: %s", u, name, e)
+            # u is the session-bound username (GitHub-validated or config-set),
+            # name is pre-validated against gateway.services. No attacker-
+            # controlled control characters flow into this log line.
+            app.logger.warning("activate failed user=%s svc=%s: %s", u, name, e)  # lgtm[py/log-injection]
             return jsonify({"error": "could not activate this service"}), 500
         audit.record("activate", user=u, ip=src, service=name,
                      expires_at=exp, wg_ip=gateway.user_ip(u))
@@ -881,9 +898,10 @@ def create_app(config: dict) -> Flask:
         try:
             exp = gateway.extend(u, name, source_ip=src)
         except PermissionError as e:
-            return jsonify({"error": str(e)}), 403
+            # Same reasoning as api_activate — see comment there.
+            return jsonify({"error": str(e)}), 403  # lgtm[py/stack-trace-exposure]
         except Exception as e:
-            app.logger.warning("extend failed user=%s svc=%s: %s", u, name, e)
+            app.logger.warning("extend failed user=%s svc=%s: %s", u, name, e)  # lgtm[py/log-injection]
             return jsonify({"error": "could not extend this service"}), 500
         audit.record("extend", user=u, ip=src, service=name,
                      expires_at=exp, wg_ip=gateway.user_ip(u))
@@ -1048,8 +1066,13 @@ def main() -> None:
     config = load_config(config_path)
     app = create_app(config)
     web = config.get("web", {})
+    # This dev-mode path is only reached by `python app.py` (never in
+    # production — gunicorn is the prod server, see wsgi.py). Binding to
+    # 0.0.0.0 inside a container is the correct default: Docker's port
+    # mapping only reaches interfaces inside the namespace, and the
+    # container itself is the security boundary (cap_drop/NET_ADMIN).
     app.run(
-        host=web.get("host", "0.0.0.0"),
+        host=web.get("host", "0.0.0.0"),  # nosec B104
         port=web.get("port", 8080),
         use_reloader=False,
         threaded=True,

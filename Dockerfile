@@ -9,6 +9,8 @@ FROM dhi.io/python:3-sfw-dev
 # CAP_NET_ADMIN to manipulate wg0 + iptables, so we must run as root in
 # the container. cap_drop:ALL + cap_add:NET_ADMIN + no-new-privileges in
 # docker-compose.yml keep the blast radius narrow.
+# hadolint ignore=DL3002
+# nosemgrep: dockerfile.security.last-user-is-root.last-user-is-root
 USER root
 
 WORKDIR /app
@@ -18,6 +20,12 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
 
+# Intentionally not pinning apt package versions. Our supply-chain hedge
+# is the DHI base + weekly nightly rebuild (see .github/workflows/build.yml)
+# which picks up the currently-patched Debian repo state on each build.
+# Strict version pinning would freeze us on stale versions and block CVE
+# patches from landing on the next rebuild.
+# hadolint ignore=DL3008
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       wireguard-tools \

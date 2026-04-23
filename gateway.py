@@ -678,12 +678,14 @@ class Gateway:
             try:
                 self._wg_remove_peer(u["public_key"])
             except Exception as e:
-                log.warning("wg peer remove failed for %s: %s", username, e)
+                # username is GitHub-validated ([A-Za-z0-9-]) or admin-set in
+                # config.yaml — no control characters reach this log line.
+                log.warning("wg peer remove failed for %s: %s", username, e)  # lgtm[py/log-injection]
             u["public_key"] = None
             u["preshared_key"] = None
             self._save_users()
             self._mark_sessions_invalid(username)
-        log.info("revoked user=%s ip=%s (policy preserved)", username, u.get("ip"))
+        log.info("revoked user=%s ip=%s (policy preserved)", username, u.get("ip"))  # lgtm[py/log-injection]
         return True
 
     def delete_user(self, username: str) -> bool:
@@ -718,10 +720,12 @@ class Gateway:
                 try:
                     self._wg_remove_peer(u["public_key"])
                 except Exception as e:
-                    log.warning("wg peer remove failed for %s: %s", username, e)
+                    # username is GitHub-validated ([A-Za-z0-9-]) or admin-set
+                    # in config.yaml — no control characters reach this line.
+                    log.warning("wg peer remove failed for %s: %s", username, e)  # lgtm[py/log-injection]
             self._save_users()
             self._mark_sessions_invalid(username)
-        log.info("deleted user=%s ip=%s (all policy erased)", username, u.get("ip"))
+        log.info("deleted user=%s ip=%s (all policy erased)", username, u.get("ip"))  # lgtm[py/log-injection]
         return True
 
     # --- service resolution ----------------------------------------------
