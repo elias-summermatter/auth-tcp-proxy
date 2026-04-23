@@ -7,7 +7,7 @@
   <meta name="referrer" content="no-referrer">
   <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='logo.svg') }}">
   <title>Setup guide — Secure Infrastructure Gateway</title>
-  <style>
+  <style nonce="{{ csp_nonce }}">
     :root { color-scheme: dark; }
     body { font-family: system-ui, -apple-system, sans-serif; background: #1e1e2e; color: #cdd6f4; margin: 0; padding: 2rem; max-width: 900px; margin: 0 auto; line-height: 1.55; }
     header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; gap: 1rem; }

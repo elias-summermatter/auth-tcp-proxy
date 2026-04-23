@@ -371,18 +371,21 @@ def create_app(config: dict) -> Flask:
         resp.headers.setdefault("X-DNS-Prefetch-Control", "off")
         # Suppress default Server/Werkzeug fingerprinting where we can.
         resp.headers.pop("Server", None)
-        # Strict CSP: nonce-based scripts with no `'unsafe-inline'`, so
-        # an injection without the per-request nonce cannot execute
-        # script. `'strict-dynamic'` lets a nonce-permitted script load
-        # further scripts that inherit trust (Chrome/Firefox). Style-src
-        # retains 'unsafe-inline' because the UI uses inline style=""
-        # attributes in many places (nonces don't cover attribute styles).
+        # Strict CSP: nonce-based scripts + nonce-based styles with no
+        # `'unsafe-inline'` anywhere. Every <script> and <style> tag in
+        # the templates carries nonce="{{ csp_nonce }}". Every visual
+        # style is either in a <style> block or in a CSS class — there
+        # are no inline style="" attributes left (we refactored them
+        # into utility classes). An XSS injection without the nonce
+        # cannot execute script AND cannot inject CSS rules that would
+        # otherwise be useful for exfiltration (CSS-based attribute
+        # stealing, data-URL tricks, etc.).
         nonce = getattr(g, "csp_nonce", "")
         resp.headers.setdefault(
             "Content-Security-Policy",
             "default-src 'self'; "
             f"script-src 'self' 'nonce-{nonce}' 'strict-dynamic'; "
-            "style-src 'self' 'unsafe-inline'; "
+            f"style-src 'self' 'nonce-{nonce}'; "
             "img-src 'self'; "
             "font-src 'self'; "
             "connect-src 'self'; "

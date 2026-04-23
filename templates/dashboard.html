@@ -7,7 +7,7 @@
   <meta name="referrer" content="no-referrer">
   <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='logo.svg') }}">
   <title>Secure Infrastructure Gateway</title>
-  <style>
+  <style nonce="{{ csp_nonce }}">
     :root { color-scheme: dark; }
     body { font-family: system-ui, -apple-system, sans-serif; background: #1e1e2e; color: #cdd6f4; margin: 0 auto; padding: 2rem; max-width: 1800px; }
     header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; flex-wrap: wrap; gap: 1rem; }
@@ -102,6 +102,33 @@
     footer { margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid #313244; color: #6c7086; font-size: 0.85rem; text-align: center; }
     footer a { color: #89b4fa; text-decoration: none; }
     footer a:hover { color: #74c7ec; text-decoration: underline; }
+
+    /* Utilities — replace inline style="" so a strict CSP without
+       `style-src 'unsafe-inline'` can be enforced. */
+    .text-right { text-align: right; }
+    .text-center { text-align: center; }
+    .text-muted { color: #6c7086; }
+    .text-dim { color: #a6adc8; }
+    .text-success { color: #a6e3a1; }
+    .text-warning { color: #f9e2af; }
+    .text-danger { color: #f38ba8; }
+    .text-xs { font-size: 0.8rem; }
+    .text-sm { font-size: 0.85rem; }
+    .text-md { font-size: 0.9rem; }
+    .mono-sm { font-family: ui-monospace, monospace; font-size: 0.85rem; }
+    .break-all { word-break: break-all; }
+    .no-underline { text-decoration: none; }
+    .no-margin { margin: 0; }
+    .mt-tiny { margin-top: 0.2rem; }
+
+    /* Small component styles */
+    .header-actions { display: flex; gap: 0.5rem; align-items: center; }
+    .inline-help-link { margin-left: 0.75rem; color: #a6adc8; font-size: 0.85rem; }
+    .empty-cell { color: #6c7086; text-align: center; padding: 1rem; }
+    .section-meta { color: #a6adc8; font-size: 0.9rem; margin: 0 0 0.75rem 0; }
+    .webhook-error-detail { color: #f38ba8; font-size: 0.8rem; margin-top: 0.2rem; }
+    .modal-warn.modal-warn-mesh { background: rgba(203,166,247,0.12); border-left-color: #cba6f7; }
+    .chip-method { margin: 0 0.2rem 0.2rem 0; }
   </style>
 </head>
 <body data-has-config="{{ 'true' if has_config else 'false' }}" data-is-admin="{{ 'true' if is_admin else 'false' }}">
@@ -117,9 +144,9 @@
         </div>
       </div>
     </div>
-    <div style="display:flex;gap:0.5rem;align-items:center">
-      <a class="logout" href="{{ url_for('help_page') }}" style="text-decoration:none">Setup guide</a>
-      <form method="post" action="{{ url_for('logout') }}" style="margin:0">
+    <div class="header-actions">
+      <a class="logout no-underline" href="{{ url_for('help_page') }}">Setup guide</a>
+      <form method="post" action="{{ url_for('logout') }}" class="no-margin">
         <button class="logout" type="submit">Sign out</button>
       </form>
     </div>
@@ -140,7 +167,7 @@
     <button class="btn-primary" type="button" id="open-download-modal">
       {{ "Rotate &amp; download config" | safe if has_config else "Generate &amp; download config" | safe }}
     </button>
-    <a href="{{ url_for('help_page') }}" style="margin-left:0.75rem;color:#a6adc8;font-size:0.85rem">How do I use this file? →</a>
+    <a href="{{ url_for('help_page') }}" class="inline-help-link">How do I use this file? →</a>
   </div>
 
   <!-- Confirmation modal shown before (re)downloading a WG config. The user
@@ -182,7 +209,7 @@
         <th>Service</th>
         <th>Destination</th>
         <th>Status</th>
-        <th style="text-align:right">Actions</th>
+        <th class="text-right">Actions</th>
       </tr>
     </thead>
     <tbody id="rows">
@@ -191,7 +218,7 @@
         <td><strong>{{ svc.name }}</strong>{% if svc.kind == 'mesh' %} <span class="mesh-badge" title="Peer-to-peer network: while active you can reach other members directly">peer network</span>{% endif %}<span class="health-cell"></span></td>
         <td class="target">
           {% if svc.kind == 'mesh' %}
-            <em style="color:#a6adc8">other active peers (opt-in)</em>
+            <em class="text-dim">other active peers (opt-in)</em>
           {% else %}
             {% if svc.hostname %}{{ svc.hostname }}{% endif %}
             {% if svc.port %}:{{ svc.port }}{% endif %}
@@ -199,7 +226,7 @@
           {% endif %}
         </td>
         <td class="status"><span class="status-inactive">—</span></td>
-        <td class="actions" style="text-align:right"></td>
+        <td class="actions text-right"></td>
       </tr>
       {% endfor %}
     </tbody>
@@ -216,7 +243,7 @@
   <div id="mesh-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="mesh-modal-title">
     <div class="modal-box">
       <h3 id="mesh-modal-title">Join the shared network?</h3>
-      <div class="modal-warn" style="background:rgba(203,166,247,0.12);border-left-color:#cba6f7">
+      <div class="modal-warn modal-warn-mesh">
         While active, <strong>every other member can reach your machine directly</strong>
         over the WireGuard tunnel using your WG IP. They will see your username
         and WG IP in their peer list, same as you will see theirs.
@@ -243,7 +270,7 @@
 
   <div id="mesh-peers-section" hidden>
     <h2>Shared network peers</h2>
-    <p class="meta" style="color:#a6adc8;font-size:0.9rem;margin:0 0 0.75rem 0">
+    <p class="meta section-meta">
       You are currently in the shared network. Every user below can reach your
       WG IP directly until your grant expires, and you can reach theirs.
     </p>
@@ -273,7 +300,7 @@
           <th>Deliveries</th>
           <th>Last forwarded</th>
           <th>Last status</th>
-          <th style="text-align:right">Actions</th>
+          <th class="text-right">Actions</th>
         </tr>
       </thead>
       <tbody id="webhooks-rows"></tbody>
@@ -290,11 +317,11 @@
         <th>Approved services</th>
         <th>Blocked services</th>
         <th>Registered</th>
-        <th style="text-align:right">Actions</th>
+        <th class="text-right">Actions</th>
       </tr>
     </thead>
     <tbody id="users-rows">
-      <tr><td colspan="7" style="color:#6c7086;text-align:center;padding:1rem">loading…</td></tr>
+      <tr><td colspan="7" class="empty-cell">loading…</td></tr>
     </tbody>
   </table>
 
@@ -471,10 +498,10 @@ function render() {
         </div>
       `;
     } else if (blockedForMe.has(name)) {
-      statusCell.innerHTML = `<span class="status-inactive" style="color:#f38ba8">blocked by admin</span>`;
+      statusCell.innerHTML = `<span class="status-inactive text-danger">blocked by admin</span>`;
       actionsCell.innerHTML = `<div class="btn-group"><button class="btn-primary" disabled title="An administrator has blocked this service for you">Activate</button></div>`;
     } else if (tr.dataset.requiresApproval === 'true' && !approvedForMe.has(name)) {
-      statusCell.innerHTML = `<span class="status-inactive" style="color:#f9e2af">awaiting admin approval</span>`;
+      statusCell.innerHTML = `<span class="status-inactive text-warning">awaiting admin approval</span>`;
       actionsCell.innerHTML = `<div class="btn-group"><button class="btn-primary" disabled title="This service requires explicit approval from an administrator before you can use it">Activate</button></div>`;
     } else {
       statusCell.innerHTML = `<span class="status-inactive">inactive</span>`;
@@ -550,7 +577,7 @@ function renderMeshPeers() {
       : '—';
     const isSelf = p.username === currentUser;
     return `<tr class="${isSelf ? 'self-row' : ''}">
-      <td><strong>${escapeHtml(p.username)}</strong>${isSelf ? ' <span style="color:#6c7086;font-size:0.8rem">(you)</span>' : ''}</td>
+      <td><strong>${escapeHtml(p.username)}</strong>${isSelf ? ' <span class="text-muted text-xs">(you)</span>' : ''}</td>
       <td class="ip">${escapeHtml(p.wg_ip)}</td>
       <td class="countdown">${escapeHtml(ends)}</td>
     </tr>`;
@@ -603,19 +630,19 @@ function renderWebhooks() {
   tbody.innerHTML = webhooksList.map(wh => {
     const lastTime = wh.last_forwarded_at
       ? fmtInstant(new Date(wh.last_forwarded_at * 1000))
-      : '<span style="color:#6c7086">never</span>';
-    const deliveries = `${wh.total} total (<span style="color:#a6e3a1">${wh.successes}</span> / <span style="color:#f38ba8">${wh.failures}</span>)`;
+      : '<span class="text-muted">never</span>';
+    const deliveries = `${wh.total} total (<span class="text-success">${wh.successes}</span> / <span class="text-danger">${wh.failures}</span>)`;
     const lastStatus = wh.last_upstream_status
       ? `<span class="ip">${wh.last_upstream_status}</span>`
-      : '<span style="color:#6c7086">—</span>';
+      : '<span class="text-muted">—</span>';
     const errorLine = wh.last_error
-      ? `<div style="color:#f38ba8;font-size:0.8rem;margin-top:0.2rem">${escapeHtml(wh.last_error)}</div>`
+      ? `<div class="webhook-error-detail">${escapeHtml(wh.last_error)}</div>`
       : '';
     const hmacChip = wh.has_hmac
       ? '<span class="chip chip-active" title="X-Hub-Signature-256 verified at the gateway">verified</span>'
       : '<span class="chip chip-blocked" title="Gateway does not verify the signature — target must validate it">not verified</span>';
     const methodsCell = Array.isArray(wh.methods) && wh.methods.length
-      ? wh.methods.map(m => `<span class="chip chip-approved" style="margin:0 0.2rem 0.2rem 0" title="HTTP method accepted on this webhook">${escapeHtml(m)}</span>`).join('')
+      ? wh.methods.map(m => `<span class="chip chip-approved chip-method" title="HTTP method accepted on this webhook">${escapeHtml(m)}</span>`).join('')
       : '<span class="no-entry">—</span>';
     const fullUrl = window.location.origin + '/hook/' + wh.path;
     const toggleBtn = wh.enabled
@@ -626,13 +653,13 @@ function renderWebhooks() {
       : `<strong>${escapeHtml(wh.name)}</strong> <span class="chip chip-blocked" title="Deliveries are being dropped. Click Enable to resume.">disabled</span>`;
     return `<tr class="${wh.enabled ? '' : 'self-row'}">
       <td>${nameCell}</td>
-      <td class="target" style="word-break:break-all">${escapeHtml(wh.target)}</td>
+      <td class="target break-all">${escapeHtml(wh.target)}</td>
       <td>${methodsCell}</td>
       <td>${hmacChip}</td>
-      <td style="font-family:ui-monospace,monospace;font-size:0.85rem">${deliveries}</td>
-      <td style="font-family:ui-monospace,monospace;font-size:0.85rem">${lastTime}</td>
+      <td class="mono-sm">${deliveries}</td>
+      <td class="mono-sm">${lastTime}</td>
       <td>${lastStatus}${errorLine}</td>
-      <td style="text-align:right"><div class="btn-group">${toggleBtn} <button class="btn-secondary" data-copy-webhook="${escapeHtml(fullUrl)}" title="Copy full URL to clipboard">Copy URL</button></div></td>
+      <td class="text-right"><div class="btn-group">${toggleBtn} <button class="btn-secondary" data-copy-webhook="${escapeHtml(fullUrl)}" title="Copy full URL to clipboard">Copy URL</button></div></td>
     </tr>`;
   }).join('');
 }
@@ -641,7 +668,7 @@ function renderUsers() {
   const tbody = document.getElementById('users-rows');
   if (!tbody) return;
   if (!usersList.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="color:#6c7086;text-align:center;padding:1rem">no users have a WG config yet</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">no users have a WG config yet</td></tr>';
     return;
   }
   const now = Date.now() / 1000;
@@ -706,7 +733,7 @@ function renderUsers() {
       : '';
     const deleteBtn = `<button class="btn-danger" data-delete="${uname}" title="Fully forget this user: IP, approvals, blocks, and all history are erased.">Delete</button>`;
     const actions = isSelf
-      ? '<span style="color:#6c7086;font-size:0.85rem">you</span>'
+      ? '<span class="text-muted text-sm">you</span>'
       : `<div class="btn-group">${lockBtn} ${revokeBtn} ${deleteBtn}</div>`;
 
     const ipCell = u.has_config
@@ -719,8 +746,8 @@ function renderUsers() {
       <td>${activeCell}</td>
       <td>${approvedCell}</td>
       <td>${blockedCell}</td>
-      <td style="color:#a6adc8;font-size:0.85rem">${escapeHtml(created)}</td>
-      <td style="text-align:right">${actions}</td>
+      <td class="text-dim text-sm">${escapeHtml(created)}</td>
+      <td class="text-right">${actions}</td>
     </tr>`;
   }).join('');
 }
@@ -951,7 +978,7 @@ function renderAudit(events) {
       <td class="evt evt-${escapeHtml(e.event)}">${escapeHtml(e.event)}</td>
       <td><span class="who">${escapeHtml(e.user || '—')}</span></td>
       <td class="ip-cell">${escapeHtml(e.ip || '—')}</td>
-      <td class="svc">${escapeHtml(e.service || '')} <span style="color:#6c7086">${escapeHtml(fmtAuditDetail(e))}</span></td>
+      <td class="svc">${escapeHtml(e.service || '')} <span class="text-muted">${escapeHtml(fmtAuditDetail(e))}</span></td>
     </tr>`;
   }).join('');
 }

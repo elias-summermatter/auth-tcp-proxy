@@ -7,7 +7,7 @@
   <meta name="referrer" content="no-referrer">
   <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='logo.svg') }}">
   <title>Sign in</title>
-  <style>
+  <style nonce="{{ csp_nonce }}">
     body { font-family: system-ui, -apple-system, sans-serif; background: #1e1e2e; color: #cdd6f4; display: flex; flex-direction: column; min-height: 100vh; align-items: center; justify-content: center; margin: 0; }
     .page-footer { margin-top: 2rem; color: #6c7086; font-size: 0.85rem; text-align: center; }
     .page-footer a { color: #89b4fa; text-decoration: none; }

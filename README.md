@@ -664,9 +664,14 @@ userspace proxy would break the chain of trust.
 
 **Browser-facing hardening (full high-security stance):**
 
-- **CSP with per-request nonces** on every `<script>` tag. `unsafe-inline`
-  is not permitted for scripts; `strict-dynamic` is set so an XSS
-  injection that doesn't possess the per-request nonce cannot execute.
+- **CSP with per-request nonces** on every `<script>` **and every
+  `<style>`** tag. `'unsafe-inline'` is forbidden on both; `strict-dynamic`
+  is set on script-src so an XSS injection that doesn't possess the
+  per-request nonce cannot execute — and also cannot inject CSS that
+  would enable CSS-based data exfiltration (selector-based attribute
+  stealing, etc.). Every visual style lives either in a nonced `<style>`
+  block or in a CSS class; there are zero inline `style=""` attributes
+  in any template.
 - **Cross-Origin-Opener-Policy: same-origin** — severs `window.opener`
   relationships with every cross-origin window, defeating all tabnabbing
   and popup-based cross-origin attacks.
