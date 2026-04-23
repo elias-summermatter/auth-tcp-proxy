@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 import bcrypt
 import requests
 import yaml
-from flask import (Flask, Response, abort, jsonify, redirect, render_template,
+from flask import (Flask, Response, abort, g, jsonify, redirect, render_template,
                    request, session, url_for)
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -120,6 +120,14 @@ def create_app(config: dict) -> Flask:
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SECURE"] = config.get("session_cookie_secure", False)
     app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(seconds=SESSION_MAX_AGE_SECONDS)
+    # __Host- prefix binds the cookie to our exact hostname: no Domain
+    # attribute, Secure required, Path=/. Blocks a sibling/parent-domain
+    # cookie named "session" from shadowing ours. Only safe to turn on
+    # when Secure is set — the prefix rules are browser-enforced, so in
+    # dev mode (session_cookie_secure=false) we fall back to the default
+    # name or the browser would reject the cookie entirely.
+    if app.config["SESSION_COOKIE_SECURE"]:
+        app.config["SESSION_COOKIE_NAME"] = "__Host-session"
 
     if config.get("trust_proxy", False):
         from werkzeug.middleware.proxy_fix import ProxyFix
@@ -224,6 +232,45 @@ def create_app(config: dict) -> Flask:
         return True, is_admin_via_team, ""
 
     @app.before_request
+    def _csrf_origin_check():
+        """Reject state-changing requests whose Origin doesn't match our host.
+
+        Closes the cross-subdomain CSRF gap: browsers treat siblings under
+        the same registered domain (e.g. `editor-bajoir.wepublish.cloud`
+        and `gateway.wepublish.cloud`) as same-site, so `SameSite=Lax`
+        still permits session cookies on cross-subdomain POST navigations.
+        A compromised sibling could otherwise auto-submit forms to our
+        /api/admin/* endpoints with the victim's cookies attached.
+
+        We exempt the webhook passthrough: external senders (GitHub,
+        GitLab) never send an Origin header that matches our host, and
+        the secret path is the auth mechanism there.
+
+        Relies on `trust_proxy: true` + Caddy setting X-Forwarded-Proto
+        correctly, so `request.scheme` reflects the browser's view
+        (https) rather than the Caddy→Flask hop (http). Without ProxyFix
+        the expected origin would be `http://...` while the browser
+        sends `https://...`, and every POST would fail.
+        """
+        if request.method in ("GET", "HEAD", "OPTIONS"):
+            return
+        if request.path.startswith("/hook/"):
+            return
+        expected = f"{request.scheme}://{request.host}"
+        origin = request.headers.get("Origin")
+        if origin == expected:
+            return
+        # Fallback: some very old browsers omit Origin on same-origin
+        # POSTs. Our own Referrer-Policy: no-referrer will usually strip
+        # the Referer, but checking it doesn't hurt.
+        referer = request.headers.get("Referer")
+        if referer and referer.startswith(expected + "/"):
+            return
+        audit.record("csrf_blocked", ip=request.remote_addr,
+                     path=request.path, origin=origin or None)
+        abort(403)
+
+    @app.before_request
     def _session_max_age():
         # Absolute 24h cap from login time, regardless of activity. A stolen
         # session cookie expires with the original login, not when the thief
@@ -253,18 +300,51 @@ def create_app(config: dict) -> Flask:
                 return jsonify({"error": "session invalidated"}), 401
             return redirect(url_for("login"))
 
+    @app.before_request
+    def _csp_nonce():
+        # Per-request cryptographic nonce; embedded in the CSP header and
+        # on every <script>/<style> tag via the `csp_nonce` Jinja variable.
+        # Lets us drop 'unsafe-inline' from script-src entirely — an XSS
+        # injection without access to this nonce cannot execute scripts.
+        g.csp_nonce = secrets.token_urlsafe(18)
+
+    @app.context_processor
+    def _inject_csp_nonce():
+        return {"csp_nonce": getattr(g, "csp_nonce", "")}
+
     @app.after_request
     def _security_headers(resp):
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
         resp.headers.setdefault("X-Frame-Options", "DENY")
         resp.headers.setdefault("Referrer-Policy", "no-referrer")
+        # Permissions-Policy — deny every powerful feature by default.
+        # Expanded list of interfaces a compromised page could otherwise
+        # request from users (sensors, hardware, payments, autoplay, etc.).
         resp.headers.setdefault(
             "Permissions-Policy",
-            "camera=(), microphone=(), geolocation=(), interest-cohort=()",
+            "accelerometer=(), ambient-light-sensor=(), autoplay=(), "
+            "battery=(), bluetooth=(), camera=(), "
+            "display-capture=(), document-domain=(), "
+            "encrypted-media=(), execution-while-not-rendered=(), "
+            "execution-while-out-of-viewport=(), fullscreen=(), "
+            "geolocation=(), gyroscope=(), hid=(), "
+            "identity-credentials-get=(), idle-detection=(), "
+            "keyboard-map=(), magnetometer=(), microphone=(), midi=(), "
+            "navigation-override=(), otp-credentials=(), payment=(), "
+            "picture-in-picture=(), publickey-credentials-create=(), "
+            "publickey-credentials-get=(), screen-wake-lock=(), "
+            "serial=(), speaker-selection=(), storage-access=(), "
+            "sync-xhr=(), usb=(), web-share=(), "
+            "window-management=(), xr-spatial-tracking=(), "
+            "interest-cohort=()",
         )
+        # HSTS with preload + 2-year max-age. `preload` signals that you
+        # want to be added to the browsers' baked-in HSTS list (submit
+        # via hstspreload.org once your entire `wepublish.cloud` subtree
+        # is HTTPS-only — this commits you to that).
         resp.headers.setdefault(
             "Strict-Transport-Security",
-            "max-age=31536000; includeSubDomains",
+            "max-age=63072000; includeSubDomains; preload",
         )
         # Belt + suspenders against search engines and AI crawlers. Meta
         # tags in templates cover the HTML path; this header covers every
@@ -273,21 +353,47 @@ def create_app(config: dict) -> Flask:
             "X-Robots-Tag",
             "noindex, nofollow, noarchive, nosnippet, noimageindex",
         )
+        # Cross-origin isolation suite — COOP blocks any cross-origin
+        # window from holding a `window.opener` reference to our page,
+        # defeating all tabnabbing and popup-based cross-origin attacks.
+        # CORP blocks other origins from loading our resources via <img>,
+        # <script>, <link> etc. COEP requires every subresource to
+        # explicitly opt in to cross-origin usage — protects against
+        # Spectre-style side-channel leaks of our data into other origins.
+        resp.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        resp.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+        resp.headers.setdefault("Cross-Origin-Embedder-Policy", "require-corp")
+        # Block Adobe Flash / Acrobat crossdomain.xml lookups and similar
+        # legacy cross-domain mechanisms that bypass SOP.
+        resp.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
+        # Stop the browser from pre-resolving DNS for arbitrary hrefs on
+        # our pages — tiny side-channel / privacy win.
+        resp.headers.setdefault("X-DNS-Prefetch-Control", "off")
         # Suppress default Server/Werkzeug fingerprinting where we can.
         resp.headers.pop("Server", None)
-        # Templates use inline <script> and <style> blocks, so 'unsafe-inline'
-        # is required; default-src 'self' still blocks external resource loads
-        # and frame-ancestors 'none' blocks clickjacking.
+        # Strict CSP: nonce-based scripts with no `'unsafe-inline'`, so
+        # an injection without the per-request nonce cannot execute
+        # script. `'strict-dynamic'` lets a nonce-permitted script load
+        # further scripts that inherit trust (Chrome/Firefox). Style-src
+        # retains 'unsafe-inline' because the UI uses inline style=""
+        # attributes in many places (nonces don't cover attribute styles).
+        nonce = getattr(g, "csp_nonce", "")
         resp.headers.setdefault(
             "Content-Security-Policy",
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline'; "
+            f"script-src 'self' 'nonce-{nonce}' 'strict-dynamic'; "
             "style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data:; "
+            "img-src 'self'; "
+            "font-src 'self'; "
             "connect-src 'self'; "
             "form-action 'self'; "
             "frame-ancestors 'none'; "
-            "base-uri 'self'",
+            "base-uri 'none'; "
+            "object-src 'none'; "
+            "manifest-src 'self'; "
+            "worker-src 'none'; "
+            "media-src 'none'; "
+            "upgrade-insecure-requests",
         )
         return resp
 

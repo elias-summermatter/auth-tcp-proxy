@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 CATEGORY = {
     "login": "auth", "login_failed": "auth", "logout": "auth",
     "session_revoked": "auth", "session_invalidated": "auth",
-    "session_expired": "auth",
+    "session_expired": "auth", "csrf_blocked": "auth",
     "activate": "grant", "extend": "grant", "deactivate": "grant",
     "grant_expired": "grant", "wg_config_generated": "grant",
     "user_revoked": "admin", "user_deleted": "admin", "admin_deactivate": "admin",
@@ -31,7 +31,8 @@ CATEGORY = {
 
 def _categories(event: str) -> list[str]:
     cats = [CATEGORY.get(event, "other")]
-    if event in ("login_failed", "service_health_fail", "webhook_failed"):
+    if event in ("login_failed", "service_health_fail", "webhook_failed",
+                 "csrf_blocked"):
         cats.append("error")
     return cats
 

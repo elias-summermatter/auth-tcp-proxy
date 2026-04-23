@@ -662,6 +662,36 @@ userspace proxy would break the chain of trust.
 - `conntrack` teardown on expiry means "access expired" actually cuts
   the wire, not just future connections.
 
+**Browser-facing hardening (full high-security stance):**
+
+- **CSP with per-request nonces** on every `<script>` tag. `unsafe-inline`
+  is not permitted for scripts; `strict-dynamic` is set so an XSS
+  injection that doesn't possess the per-request nonce cannot execute.
+- **Cross-Origin-Opener-Policy: same-origin** — severs `window.opener`
+  relationships with every cross-origin window, defeating all tabnabbing
+  and popup-based cross-origin attacks.
+- **Cross-Origin-Resource-Policy: same-origin** — no other origin can
+  load our resources via `<img>`, `<script>`, `<link>`, etc.
+- **Cross-Origin-Embedder-Policy: require-corp** — enables cross-origin
+  isolation, protecting against Spectre-style side-channel leaks and
+  forcing every subresource to explicitly opt into cross-origin use.
+- **`__Host-` session cookie prefix** — browser-enforced binding to
+  the exact hostname; a parent or sibling subdomain cannot shadow our
+  session cookie even if compromised.
+- **Origin/Referer check on all state-changing POSTs** — closes the
+  cross-subdomain CSRF gap left open by `SameSite=Lax` (which treats
+  siblings under the same registered domain as same-site). A
+  compromised `editor-bajoir.wepublish.cloud` cannot CSRF us.
+- **`X-Frame-Options: DENY` + `frame-ancestors 'none'`** — clickjacking
+  closed two ways.
+- **HSTS with `preload` + 2-year max-age + `includeSubDomains`**.
+- **Expanded Permissions-Policy** denies every powerful browser
+  feature (camera, mic, geolocation, USB, HID, Bluetooth, serial,
+  payment, WebAuthn-create, etc.) by default.
+- **`X-Permitted-Cross-Domain-Policies: none`** blocks legacy Flash /
+  Acrobat cross-domain exfiltration. **`X-DNS-Prefetch-Control: off`**
+  removes a minor side-channel.
+
 **The tradeoffs you're making:**
 
 - The gateway becomes a concentrated target. Patch it, rotate
