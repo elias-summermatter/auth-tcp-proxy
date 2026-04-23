@@ -369,6 +369,11 @@ def create_app(config: dict) -> Flask:
         # Stop the browser from pre-resolving DNS for arbitrary hrefs on
         # our pages — tiny side-channel / privacy win.
         resp.headers.setdefault("X-DNS-Prefetch-Control", "off")
+        # No caching of authenticated content anywhere — not browser cache,
+        # bfcache, CDN, corporate proxy, or forensic disk image. Some routes
+        # (wg-config download) already set this explicitly; applying as a
+        # default here covers every HTML/JSON response.
+        resp.headers.setdefault("Cache-Control", "no-store")
         # Suppress default Server/Werkzeug fingerprinting where we can.
         resp.headers.pop("Server", None)
         # Strict CSP: nonce-based scripts + nonce-based styles with no
