@@ -734,6 +734,12 @@ userspace proxy would break the chain of trust.
 - **Dependabot** (`.github/dependabot.yml`) opens PRs when any
   pip/docker/github-actions dependency has a new version, with
   security updates filed immediately regardless of schedule.
+  **Patch + minor bumps auto-merge** once the security scanners pass
+  (via `.github/workflows/dependabot-auto-merge.yml`); major bumps
+  stay open for manual review because they can introduce breaking
+  API changes a scanner won't catch. Requires branch protection with
+  required status checks and "Allow auto-merge" enabled in repo
+  settings — see the comment block in that workflow file.
 - **Nightly image rebuild** (`.github/workflows/build.yml`) runs every
   night at 03:00 UTC and on every push to `main`. Publishes bit-for-bit
   identical images to both `seccomch/portcullis` on Docker Hub and

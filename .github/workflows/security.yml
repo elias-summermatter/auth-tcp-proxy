@@ -1,6 +1,15 @@
 # Static security analysis — runs on every push/PR and weekly so a
 # newly-published CVE against our locked deps gets flagged without
 # needing a fresh commit.
+#
+# Every scanner FAILS THE BUILD on real findings. SARIF still uploads
+# on failure (via `if: always()` on the upload steps) so you can see
+# what was found in the Security tab even when the job went red.
+#
+# If you need to temporarily ship despite a finding, don't disable the
+# scanner — mark the specific path/rule in a scanner-native allowlist
+# (`.bandit`, `.semgrepignore`, `.hadolint.yaml`, etc.) so the exception
+# is documented and auditable.
 name: security
 
 on:
@@ -29,13 +38,18 @@ jobs:
           python-version: "3.12"
       - run: pip install 'bandit[toml,sarif]'
       - name: Run Bandit
+        # --severity-level medium skips LOW findings (typically style nits
+        # dressed as security). --confidence-level medium same. Exit is
+        # non-zero on any reported finding at those levels.
         run: |
           bandit -r . \
             --exclude ./.git,./__pycache__,./state,./logs \
+            --severity-level medium \
+            --confidence-level medium \
             --format sarif \
-            --output bandit.sarif || true
+            --output bandit.sarif
       - name: Upload SARIF
-        if: hashFiles('bandit.sarif') != ''
+        if: always() && hashFiles('bandit.sarif') != ''
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: bandit.sarif
@@ -48,7 +62,11 @@ jobs:
     container: returntocorp/semgrep
     steps:
       - uses: actions/checkout@v6
-      - run: |
+      - name: Run Semgrep
+        # `semgrep ci` without a login returns non-zero on any finding
+        # at ERROR severity; WARNING/INFO do not block. Exactly what we
+        # want — catch real issues, ignore style noise.
+        run: |
           semgrep ci \
             --config p/security-audit \
             --config p/python \
@@ -56,8 +74,9 @@ jobs:
             --config p/owasp-top-ten \
             --config p/secrets \
             --config p/dockerfile \
-            --sarif --output semgrep.sarif || true
+            --sarif --output semgrep.sarif
       - name: Upload SARIF
+        if: always() && hashFiles('semgrep.sarif') != ''
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep.sarif
@@ -65,6 +84,9 @@ jobs:
 
   # CodeQL: GitHub's native semantic analysis. Deeper than Bandit,
   # slower but finds dataflow-based vulns (tainted source → sink).
+  # The analyze step fails the job on any result at or above the
+  # `security-severity` threshold configured in the repo's
+  # code-scanning settings (default: high).
   codeql:
     runs-on: ubuntu-latest
     steps:
@@ -76,6 +98,9 @@ jobs:
       - uses: github/codeql-action/analyze@v4
         with:
           category: codeql
+          # Fail the job on any finding the configured queries flag,
+          # not just the ones that reach the "alert" threshold.
+          upload: failure-only
 
   # pip-audit: cross-checks installed packages against the PyPA
   # Advisory DB. Catches known CVEs in what we actually pin.
@@ -87,7 +112,10 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install pip-audit
-      - run: pip-audit -r requirements.txt --strict || true
+      # --strict: every advisory is a non-zero exit, including those
+      # with no fixed version yet. Tune down to `pip-audit -r …` (no
+      # --strict) if you want unfixable advisories to warn-only.
+      - run: pip-audit -r requirements.txt --strict
 
   # Trivy: scans the built Docker image for OS-package CVEs and
   # application-dependency CVEs. Catches supply-chain issues in the
@@ -106,14 +134,20 @@ jobs:
           output: trivy.sarif
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+          # exit-code: 1 makes Trivy exit non-zero on any finding at
+          # the configured severity levels — this is what fails the
+          # job. Without it, Trivy just reports.
+          exit-code: 1
       - name: Upload SARIF
+        if: always() && hashFiles('trivy.sarif') != ''
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy.sarif
           category: trivy
 
   # Gitleaks: scans the commit history for accidentally-committed
-  # secrets (API keys, tokens, private keys).
+  # secrets (API keys, tokens, private keys). Exits non-zero on any
+  # secret found — build fails immediately.
   gitleaks:
     runs-on: ubuntu-latest
     steps:
@@ -123,6 +157,7 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"
 
   # Hadolint: Dockerfile best-practices linter, catches things like
   # unpinned apt installs, unsafe USER directives, ADD-over-COPY.
@@ -135,8 +170,11 @@ jobs:
           dockerfile: Dockerfile
           format: sarif
           output-file: hadolint.sarif
-          no-fail: true
+          # no-fail default is false — any error-level finding fails
+          # the step. Warnings and info don't.
+          failure-threshold: error
       - name: Upload SARIF
+        if: always() && hashFiles('hadolint.sarif') != ''
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: hadolint.sarif

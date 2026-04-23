@@ -926,6 +926,7 @@ function fmtAuditDetail(e) {
   if (e.target_user) parts.push(`target: ${e.target_user}`);
   if (e.webhook) parts.push(`webhook: ${e.webhook}`);
   if (e.method) parts.push(`method: ${e.method}`);
+  if (e.previous_ip) parts.push(`was: ${e.previous_ip}`);
   if (e.status) parts.push(`status: ${e.status}`);
   if (e.bytes_in != null) parts.push(`bytes: ${e.bytes_in}`);
   if (e.wg_ip) parts.push(`wg: ${e.wg_ip}`);

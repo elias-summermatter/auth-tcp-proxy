@@ -1,0 +1,66 @@
+# Auto-merge Dependabot PRs that are patch- or minor-version bumps
+# once all required status checks (security scanners, build) pass.
+# Major bumps still require manual review because they can introduce
+# breaking API changes a scanner won't catch.
+#
+# Requires on the repo:
+#   Settings → General → Pull Requests → "Allow auto-merge"
+#   Settings → Branches → Branch protection rule on `main`:
+#     - Require status checks: bandit, semgrep, codeql, pip-audit,
+#       trivy, gitleaks, hadolint (at minimum)
+#     - Require branches to be up to date before merging (recommended)
+#
+# Without branch protection this workflow degrades to "merge
+# immediately" because no checks are required to pass first. Don't
+# enable auto-merge without branch protection.
+name: dependabot-auto-merge
+
+on: pull_request_target
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    # Only act on Dependabot's own PRs. `github.actor` is trustworthy
+    # here because `pull_request_target` runs in the base repo context
+    # with its secrets, not the fork's.
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Patch: x.y.z → x.y.(z+1). Virtually always safe for the stable
+      # libraries we pin (Flask, bcrypt, cryptography, requests, etc.)
+      - name: Enable auto-merge for patch updates
+        if: steps.meta.outputs.update-type == 'version-update:semver-patch'
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Minor: x.y → x.(y+1). Very rarely breaking for libraries that
+      # follow semver (all of our direct deps do). Scanners run before
+      # merge so anything that breaks build or introduces a CVE is
+      # caught by required status checks.
+      - name: Enable auto-merge for minor updates
+        if: steps.meta.outputs.update-type == 'version-update:semver-minor'
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Major updates open normally but don't auto-merge. Review &
+      # merge manually after confirming no breaking API changes.
+      - name: Note major updates
+        if: steps.meta.outputs.update-type == 'version-update:semver-major'
+        run: |
+          gh pr comment "$PR_URL" --body "This is a **major version bump** — auto-merge is disabled. Review the changelog for breaking changes before merging."
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

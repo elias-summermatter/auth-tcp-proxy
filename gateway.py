@@ -1097,6 +1097,7 @@ class Gateway:
             g = self.grants.get(key)
             current = g.expires_at if (g and g.expires_at > now) else now
             expires = min(current + EXTEND_STEP, now + MAX_DURATION)
+            ip_changed_from: Optional[str] = None
             if g is None or g.expires_at <= now:
                 if g:
                     self._apply_rules(g.rules, delete=True)
@@ -1109,9 +1110,23 @@ class Gateway:
                     self._rebuild_mesh_rules()
             else:
                 g.expires_at = expires
+                # Surface a source-IP change as an audit signal. Not a
+                # block: legitimate roaming (mobile hand-off, ISP DHCP,
+                # home → 4G) does this all the time. But a grant going
+                # from 213.55.x.x → a random datacentre IP is worth
+                # admin attention, and this is where you spot it.
+                if source_ip and g.source_ip and source_ip != g.source_ip:
+                    ip_changed_from = g.source_ip
                 if source_ip:
                     g.source_ip = source_ip
             self._save_grants()
+        if ip_changed_from:
+            self.audit.record(
+                "grant_ip_changed",
+                user=user, service=service_name,
+                ip=source_ip, wg_ip=u["ip"],
+                previous_ip=ip_changed_from,
+            )
         return expires
 
     def deactivate(self, user: str, service_name: str) -> None:
