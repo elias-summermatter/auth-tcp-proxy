@@ -1,0 +1,55 @@
+# Auto-open PRs when dependencies publish new versions — especially CVE
+# fixes. Security updates arrive as soon as they land; other upgrades
+# are batched weekly to avoid noise.
+version: 2
+updates:
+  # Python runtime dependencies
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - python
+    commit-message:
+      prefix: "deps"
+      include: scope
+    # Security-only updates open immediately regardless of schedule.
+    # The `security-updates` policy is implicit in Dependabot — any
+    # advisory touching our locked versions gets its own PR.
+
+  # Base image (Python + DHI tag + apt packages) — catches new CVEs
+  # in the runtime, not just our app deps.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - docker
+    commit-message:
+      prefix: "deps(docker)"
+
+  # CI workflows — GitHub Actions tags should be pinned; Dependabot
+  # bumps them when publishers release new versions with fixes.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: "deps(ci)"

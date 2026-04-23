@@ -483,6 +483,26 @@ git pull
 docker compose up -d --build
 ```
 
+### Regenerate the dependency lockfile
+
+`requirements.in` lists direct Python dependencies; `requirements.txt`
+is a generated lockfile with pinned versions + SHA-256 hashes for every
+package (direct and transitive). The Dockerfile installs with
+`pip install --require-hashes`, so PyPI cannot silently swap a
+malicious build into your image between rebuilds.
+
+Regenerate after editing `requirements.in`, or periodically to pick up
+CVE-patched versions:
+
+```bash
+./scripts/lock-deps.sh
+git add requirements.txt
+git commit -m "deps: refresh lockfile"
+```
+
+The script runs `pip-compile --generate-hashes` inside a disposable
+Docker container, so you don't need pip-tools installed locally.
+
 State (`state/`, `logs/`) survives because both directories are
 bind-mounted from the host. WireGuard peers and user assignments are
 preserved across upgrades.
@@ -696,6 +716,32 @@ userspace proxy would break the chain of trust.
 - **`X-Permitted-Cross-Domain-Policies: none`** blocks legacy Flash /
   Acrobat cross-domain exfiltration. **`X-DNS-Prefetch-Control: off`**
   removes a minor side-channel.
+- **`Cache-Control: no-store`** on every response. Authenticated pages
+  are never kept in browser / proxy / CDN caches or in `bfcache`.
+- **CSP violation reporting** at `/csp-report`. Any blocked script,
+  style, or resource load generates a `csp_violation` audit event,
+  so drift or attempted attacks show up in the admin panel.
+
+**Supply chain & ops:**
+
+- **SHA-256-hash-pinned Python dependencies.** `requirements.txt` is
+  a generated lockfile; Dockerfile installs with `--require-hashes`.
+  Compromised PyPI accounts cannot ship a malicious build into your
+  image between rebuilds without the hash breaking.
+- **Dependabot** (`.github/dependabot.yml`) opens PRs when any
+  pip/docker/github-actions dependency has a new version, with
+  security updates filed immediately regardless of schedule.
+- **Static security analysis in CI** (`.github/workflows/security.yml`)
+  runs on every push and weekly:
+  - **Bandit** — Python security linter
+  - **Semgrep** — OWASP/Flask/Python/Dockerfile rulepacks
+  - **CodeQL** — GitHub's dataflow analysis
+  - **pip-audit** — cross-check against PyPA advisory DB
+  - **Trivy** — Docker image CVE scan
+  - **Gitleaks** — commit-history secret scanning
+  - **Hadolint** — Dockerfile lint
+- **`SECURITY.md`** publishes a responsible-disclosure policy so
+  researchers have a private reporting path.
 
 **The tradeoffs you're making:**
 

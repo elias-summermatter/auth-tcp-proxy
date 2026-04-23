@@ -1,0 +1,142 @@
+# Static security analysis — runs on every push/PR and weekly so a
+# newly-published CVE against our locked deps gets flagged without
+# needing a fresh commit.
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 4 * * 1"   # Mondays 04:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  security-events: write   # upload SARIF for CodeQL + other scanners
+
+jobs:
+  # Bandit: Python-specific security linter. Catches things like
+  # subprocess shell=True, weak crypto usage, hardcoded secrets,
+  # SQL string interpolation, etc.
+  bandit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install bandit[toml]
+      - name: Run Bandit
+        run: |
+          bandit -r . \
+            --exclude ./.git,./__pycache__,./state,./logs \
+            --format sarif \
+            --output bandit.sarif || true
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: bandit.sarif
+          category: bandit
+
+  # Semgrep: multi-language rulepacks covering OWASP top 10, common
+  # Flask / Python / Docker misconfigurations. Community rules — free.
+  semgrep:
+    runs-on: ubuntu-latest
+    container: returntocorp/semgrep
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          semgrep ci \
+            --config p/security-audit \
+            --config p/python \
+            --config p/flask \
+            --config p/owasp-top-ten \
+            --config p/secrets \
+            --config p/dockerfile \
+            --sarif --output semgrep.sarif || true
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  # CodeQL: GitHub's native semantic analysis. Deeper than Bandit,
+  # slower but finds dataflow-based vulns (tainted source → sink).
+  codeql:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: python
+          queries: security-extended,security-and-quality
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: codeql
+
+  # pip-audit: cross-checks installed packages against the PyPA
+  # Advisory DB. Catches known CVEs in what we actually pin.
+  pip-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pip-audit
+      - run: pip-audit -r requirements.txt --strict || true
+
+  # Trivy: scans the built Docker image for OS-package CVEs and
+  # application-dependency CVEs. Catches supply-chain issues in the
+  # DHI base layers, system packages, and Python wheels.
+  trivy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t sig:scan .
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: sig:scan
+          format: sarif
+          output: trivy.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy.sarif
+          category: trivy
+
+  # Gitleaks: scans the commit history for accidentally-committed
+  # secrets (API keys, tokens, private keys).
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Hadolint: Dockerfile best-practices linter, catches things like
+  # unpinned apt installs, unsafe USER directives, ADD-over-COPY.
+  hadolint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          format: sarif
+          output-file: hadolint.sarif
+          no-fail: true
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: hadolint.sarif
+          category: hadolint

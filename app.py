@@ -256,6 +256,10 @@ def create_app(config: dict) -> Flask:
             return
         if request.path.startswith("/hook/"):
             return
+        if request.path == "/csp-report":
+            # Browsers POST CSP violation reports with no Origin/Referer
+            # header. Rate-limited + body-capped at the endpoint itself.
+            return
         expected = f"{request.scheme}://{request.host}"
         origin = request.headers.get("Origin")
         if origin == expected:
@@ -401,7 +405,12 @@ def create_app(config: dict) -> Flask:
             "manifest-src 'self'; "
             "worker-src 'none'; "
             "media-src 'none'; "
-            "upgrade-insecure-requests",
+            "upgrade-insecure-requests; "
+            # Any violation (real attack or accidental bad HTML) is POSTed
+            # to /csp-report and lands in the audit log. Lets us see
+            # attempts that the policy silently blocked, and catch any
+            # drift before it breaks something for real users.
+            "report-uri /csp-report",
         )
         return resp
 
@@ -450,6 +459,37 @@ def create_app(config: dict) -> Flask:
     @app.route("/robots.txt")
     def robots_txt():
         return Response(ROBOTS_TXT, mimetype="text/plain")
+
+    @app.route("/csp-report", methods=["POST"])
+    @limiter.limit("60 per minute")
+    def csp_report():
+        """Collect CSP violation reports from browsers.
+
+        Browsers POST a small JSON body describing what was blocked
+        (blocked-uri, violated-directive, document-uri, etc.). We log
+        each event to the audit log so admins can review: either a
+        real attack attempt was blocked, or a legitimate page needs
+        fixing because the CSP is too tight. Small body cap + its own
+        rate limit — browsers sometimes flood reports.
+        """
+        body = request.get_data(cache=False)
+        if len(body) > 8 * 1024:
+            abort(413)
+        try:
+            payload = request.get_json(silent=True) or {}
+        except Exception:
+            payload = {}
+        report = payload.get("csp-report", payload) if isinstance(payload, dict) else {}
+        audit.record(
+            "csp_violation",
+            ip=request.remote_addr,
+            directive=(report.get("violated-directive") or report.get("effective-directive")),
+            blocked=report.get("blocked-uri"),
+            document=report.get("document-uri"),
+            source=report.get("source-file"),
+            line=report.get("line-number"),
+        )
+        return ("", 204)
 
     @app.route("/hook/<path>", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     @limiter.limit("120 per minute")
