@@ -10,7 +10,8 @@ FROM dhi.io/python:3-sfw-dev
 # the container. cap_drop:ALL + cap_add:NET_ADMIN + no-new-privileges in
 # docker-compose.yml keep the blast radius narrow.
 # hadolint ignore=DL3002
-USER root  # nosemgrep: dockerfile.security.last-user-is-root.last-user-is-root
+# nosemgrep: dockerfile.security.last-user-is-root.last-user-is-root
+USER root
 
 WORKDIR /app
 
