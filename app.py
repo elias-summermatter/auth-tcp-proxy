@@ -560,8 +560,14 @@ def create_app(config: dict) -> Flask:
         # request.headers.get() is case-insensitive (Werkzeug), so walk the
         # whitelist and pull values by canonical name — this handles GitHub
         # sending "X-Github-Event" vs our set entry "X-GitHub-Event".
+        # The per-webhook `forward_headers` list extends the global default
+        # set; deduped case-insensitively so a target requiring e.g.
+        # `Authorization` only sees it when explicitly opted-in.
+        allowed = {h.lower(): h for h in FORWARD_HEADERS}
+        for extra in wh.forward_headers:
+            allowed[extra.lower()] = extra
         headers = {}
-        for canonical in FORWARD_HEADERS:
+        for canonical in allowed.values():
             v = request.headers.get(canonical)
             if v is not None:
                 headers[canonical] = v

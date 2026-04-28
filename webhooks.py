@@ -75,6 +75,12 @@ class Webhook:
     # expand for GET-style ping integrations, PUT/PATCH-based APIs, etc.
     # Methods not in this list get a 405.
     methods: list[str] = field(default_factory=lambda: ["POST"])
+    # Extra request headers to forward to the upstream beyond the global
+    # safe-by-default set in FORWARD_HEADERS. Names are matched case-
+    # insensitively. Use sparingly — anything you list here will be
+    # propagated to the target, so don't add Cookie / X-Forwarded-* /
+    # session-bearing headers unless you mean to.
+    forward_headers: list[str] = field(default_factory=list)
     stats: WebhookStats = field(default_factory=WebhookStats)
 
 
@@ -100,6 +106,7 @@ class WebhookRegistry:
                 timeout=int(c.get("timeout", 15)),
                 return_response=bool(c.get("return_response", True)),
                 methods=[m.upper() for m in (c.get("methods") or ["POST"])],
+                forward_headers=list(c.get("forward_headers") or []),
             ))
         self._lock = threading.Lock()
         self._state_path = state_path

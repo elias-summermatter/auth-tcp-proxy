@@ -335,6 +335,15 @@ request to `ci.internal.example.com/api/webhook`.
   `["POST", "PUT"]`, etc. for targets that expect other verbs. GET-style
   ping/trigger webhooks forward query strings verbatim. HMAC verification
   only runs on body-carrying methods (POST/PUT/PATCH).
+- **Header whitelist with per-webhook opt-ins.** A safe-by-default set of
+  headers (`Content-Type`, `User-Agent`, `X-GitHub-*`, `X-Hub-Signature-*`,
+  `X-GitLab-*`) is forwarded to every target. Cookies, session headers,
+  and `Authorization` are stripped by default to prevent caller
+  credentials leaking into internal services. If a specific target
+  needs additional headers (e.g. an internal API that authenticates
+  with a Bearer token sent by the caller), list them under the webhook's
+  `forward_headers:` entry — only that webhook gets the extension; the
+  global default stays tight.
 - Every delivery is audited: `webhook_forwarded` on success,
   `webhook_failed` on errors, `webhook_suppressed` when the admin has
   disabled the webhook.

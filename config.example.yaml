@@ -102,6 +102,14 @@ shared_network:
 #     # timeout: 15                  # seconds; upstream request timeout
 #     # return_response: true        # false = return a minimal 200 regardless of upstream
 #
+#     # Extra headers to forward beyond the safe-by-default set
+#     # (Content-Type, User-Agent, X-GitHub-*, X-Hub-Signature-*, X-GitLab-*).
+#     # Use only what the target actually needs — anything listed here is
+#     # propagated as-is. Common case: an internal API that requires a
+#     # Bearer token sent by the caller.
+#     # forward_headers:
+#     #   - Authorization
+#
 #   - name: simple-trigger
 #     path: "..."
 #     target: "https://trigger.internal.example.com/ping"
